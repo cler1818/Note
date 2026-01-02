@@ -17,7 +17,7 @@ geox-url:
     https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
 rule-providers:
   youtube:
-    type: http
+    输入: http
     format: mrs
     behavior: domain
     url: >-
@@ -25,7 +25,7 @@ rule-providers:
     path: ./ruleset/youtube.mrs
     interval: 86400
   geolocation-!cn:
-    type: http
+    输入: http
     format: mrs
     behavior: domain
     url: >-
