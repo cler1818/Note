@@ -1,1 +1,748 @@
-aHlzdGVyaWEyOi8vZTk3YmU4ODgtZjcyOC00ZWY3LWJhYWItN2JjZDUwNDU2NGNlQGhremwxLnZ5dW55dW5ub2RlLnRvcDo0OTAwMD9zbmk9aGt6bDEudnl1bnl1bm5vZGUudG9wJnNlY3VyaXR5PXRscyZpbnNlY3VyZT0xIyVFNSU4OSVBOSVFNCVCRCU5OSVFNiVCNSU4MSVFOSU4NyU4RiVFRiVCQyU5QTkxLjkzJTIwR0INCmh5c3RlcmlhMjovL2U5N2JlODg4LWY3MjgtNGVmNy1iYWFiLTdiY2Q1MDQ1NjRjZUBoa3psMS52eXVueXVubm9kZS50b3A6NDkwMDA/c25pPWhremwxLnZ5dW55dW5ub2RlLnRvcCZzZWN1cml0eT10bHMmaW5zZWN1cmU9MSMlRTglQjclOUQlRTclQTYlQkIlRTQlQjglOEIlRTYlQUMlQTElRTklODclOEQlRTclQkQlQUUlRTUlODklQTklRTQlQkQlOTklRUYlQkMlOUExMSUyMCVFNSVBNCVBOQ0KaHlzdGVyaWEyOi8vZTk3YmU4ODgtZjcyOC00ZWY3LWJhYWItN2JjZDUwNDU2NGNlQGhremwxLnZ5dW55dW5ub2RlLnRvcDo0OTAwMD9zbmk9aGt6bDEudnl1bnl1bm5vZGUudG9wJnNlY3VyaXR5PXRscyZpbnNlY3VyZT0xIyVFNSVBNSU5NyVFOSVBNCU5MCVFNSU4OCVCMCVFNiU5QyU5RiVFRiVCQyU5QTIwMjgtMDItMTINCmh5c3RlcmlhMjovL2U5N2JlODg4LWY3MjgtNGVmNy1iYWFiLTdiY2Q1MDQ1NjRjZUBoa3psMS52eXVueXVubm9kZS50b3A6NDkwMDA/c25pPWhremwxLnZ5dW55dW5ub2RlLnRvcCZzZWN1cml0eT10bHMmaW5zZWN1cmU9MSMlRTklQTYlOTklRTYlQjglQUYxJUU3JTlCJUI0JUU4JUJGJTlFDQpoeXN0ZXJpYTI6Ly9lOTdiZTg4OC1mNzI4LTRlZjctYmFhYi03YmNkNTA0NTY0Y2VAaGt6bDIudnl1bnl1bm5vZGUudG9wOjUwMDAwP3NuaT1oa3psMi52eXVueXVubm9kZS50b3Amc2VjdXJpdHk9dGxzJmluc2VjdXJlPTEjJUU5JUE2JTk5JUU2JUI4JUFGMiVFNyU5QiVCNCVFOCVCRiU5RQ0KaHlzdGVyaWEyOi8vZTk3YmU4ODgtZjcyOC00ZWY3LWJhYWItN2JjZDUwNDU2NGNlQGhremwzLnZ5dW55dW5ub2RlLnRvcDo0NDAwMT9zbmk9aGt6bDMudnl1bnl1bm5vZGUudG9wJnNlY3VyaXR5PXRscyZpbnNlY3VyZT0xIyVFOSVBNiU5OSVFNiVCOCVBRjMlRTclOUIlQjQlRTglQkYlOUUNCmh5c3RlcmlhMjovL2U5N2JlODg4LWY3MjgtNGVmNy1iYWFiLTdiY2Q1MDQ1NjRjZUB0d3psLnZ5dW55dW5ub2RlLnRvcDo0Nzg4Nz9zbmk9dHd6bC52eXVueXVubm9kZS50b3Amc2VjdXJpdHk9dGxzJmluc2VjdXJlPTEjJUU1JThGJUIwJUU2JUI5JUJFJUU1JUFFJUI2JUU1JUFFJUJEJUU3JTlCJUI0JUU4JUJGJTlFDQpoeXN0ZXJpYTI6Ly9lOTdiZTg4OC1mNzI4LTRlZjctYmFhYi03YmNkNTA0NTY0Y2VAdXN6bDIudnl1bnl1bm5vZGUudG9wOjQ0MDA2P3NuaT11c3psMi52eXVueXVubm9kZS50b3Amc2VjdXJpdHk9dGxzJmluc2VjdXJlPTEjJUU3JUJFJThFJUU1JTlCJUJEJUYwJTlGJTg3JUJBJUYwJTlGJTg3JUI4JUU3JTlCJUI0JUU4JUJGJTlFDQpoeXN0ZXJpYTI6Ly9lOTdiZTg4OC1mNzI4LTRlZjctYmFhYi03YmNkNTA0NTY0Y2VAc2d6bDEudnl1bnl1bm5vZGUudG9wOjQ0MDA4P3NuaT1zZ3psMS52eXVueXVubm9kZS50b3Amc2VjdXJpdHk9dGxzJmluc2VjdXJlPTEjJUU2JTk2JUIwJUU1JThBJUEwJUU1JTlEJUExJUYwJTlGJTg3JUI4JUYwJTlGJTg3JUFDJUU3JTlCJUI0JUU4JUJGJTlFDQpoeXN0ZXJpYTI6Ly9lOTdiZTg4OC1mNzI4LTRlZjctYmFhYi03YmNkNTA0NTY0Y2VAaGd6bC52eXVueXVubm9kZS50b3A6NDQwOTg/aW5zZWN1cmU9MCMlRTklOUYlQTklRTUlOUIlQkQlRTclOUIlQjQlRTglQkYlOUUNCmh5c3RlcmlhMjovL2U5N2JlODg4LWY3MjgtNGVmNy1iYWFiLTdiY2Q1MDQ1NjRjZUB6emxtZzIuaGh3eXkueHl6OjQ0MDg4P3NuaT11c3psMy52eXVueXVubm9kZS50b3Amc2VjdXJpdHk9dGxzJmluc2VjdXJlPTEjJUU3JUJFJThFJUU1JTlCJUJEJUYwJTlGJTg3JUJBJUYwJTlGJTg3JUI4JUU3JTlCJUI0JUU4JUJGJTlFMDINCmh5c3RlcmlhMjovL2U5N2JlODg4LWY3MjgtNGVmNy1iYWFiLTdiY2Q1MDQ1NjRjZUBqcHpsMS52eXVueXVubm9kZS50b3A6NDQwMTE/c25pPWpwemwxLnZ5dW55dW5ub2RlLnRvcCZzZWN1cml0eT10bHMmaW5zZWN1cmU9MSMlRTYlOTclQTUlRTYlOUMlQUMlRjAlOUYlODclQUYlRjAlOUYlODclQjUlRTclOUIlQjQlRTglQkYlOUUNCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZUWHBTYkZreVdYZE9SRkY2VFhwWk1FOVVTVE5QVVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5MS5vZW9vZS5jbjoxOTAwMiMlRjAlOUYlODclQUQlRjAlOUYlODclQjAlRTklQTYlOTklRTYlQjglQUYwMQ0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNldrUktiVTFIUlhoT1ZHUnBXVlJPYlU5VVpHMU9RVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXk1Lm9lb29lLmNuOjE5MDA2IyVGMCU5RiU4NyVBRCVGMCU5RiU4NyVCMCVFOSVBNiU5OSVFNiVCOCVBRjAyDQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VFhwU2JGa3lXWGRPUkZGNlRYcFpNRTlVU1ROUFVUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTEub2Vvb2UuY246MTkwMDgjJUYwJTlGJTg3JUFEJUYwJTlGJTg3JUIwJUU5JUE2JTk5JUU2JUI4JUFGMDMNCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZXa1JLYlUxSFJYaE9WR1JwV1ZST2JVOVVaRzFPUVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5Mi5vZW9vZS5jbjoxOTAwOSMlRjAlOUYlODclQUQlRjAlOUYlODclQjAlRTklQTYlOTklRTYlQjglQUYwNA0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNlRYcFNiRmt5V1hkT1JGRjZUWHBaTUU5VVNUTlBVVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXkzLm9lb29lLmNuOjE5MDIzIyVGMCU5RiU4NyVBRCVGMCU5RiU4NyVCMCVFOSVBNiU5OSVFNiVCOCVBRjA1DQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VFhwU2JGa3lXWGRPUkZGNlRYcFpNRTlVU1ROUFVUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTMub2Vvb2UuY246MTkwMjUjJUYwJTlGJTg3JUFEJUYwJTlGJTg3JUIwJUU5JUE2JTk5JUU2JUI4JUFGMDYNCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZUMWRKTTAxVVRUVk9hbFY1VDFSTk1rNHlVbWhPUVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5Mi5vZW9vZS5jbjoxOTAyNiMlRjAlOUYlODclQUQlRjAlOUYlODclQjAlRTklQTYlOTklRTYlQjglQUYwNw0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNlQxZEpNMDFVVFRWT2FsVjVUMVJOTWs0eVVtaE9RVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXkzLm9lb29lLmNuOjE5MDI3IyVGMCU5RiU4NyVBRCVGMCU5RiU4NyVCMCVFOSVBNiU5OSVFNiVCOCVBRjA4DQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VDFkSk0wMVVUVFZPYWxWNVQxUk5NazR5VW1oT1FUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTMub2Vvb2UuY246MTk3NTAjJUYwJTlGJTg3JUFEJUYwJTlGJTg3JUIwJUU5JUE2JTk5JUU2JUI4JUFGMDkNCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZXbFJqTWxreVZtMVBWMDE2VDFkSk1scEVXWGxPWnowOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5MS5vZW9vZS5jbjoxOTA4OCMlRjAlOUYlODclQjglRjAlOUYlODclQUMlRTYlOTYlQjAlRTUlOEElQTAlRTUlOUQlQTEwMSVGMCU5RiU5NCU5MiVFOCVBNyVBMyVFOSU5NCU4MSVFNiVCNSU4MSVFNSVBQSU5MiVFNCVCRCU5Mw0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNldsUmpNbGt5Vm0xUFYwMTZUMWRKTWxwRVdYbE9aejA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXk1Lm9lb29lLmNuOjE5MDAzIyVGMCU5RiU4NyVCOCVGMCU5RiU4NyVBQyVFNiU5NiVCMCVFNSU4QSVBMCVFNSU5RCVBMTAyJUYwJTlGJTk0JTkyJUU4JUE3JUEzJUU5JTk0JTgxJUU2JUI1JTgxJUU1JUFBJTkyJUU0JUJEJTkzDQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VDBSamQxbHFhR3BPVkVwdFdsZE5ORnBFYUd0TlVUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTIub2Vvb2UuY246MTkwMTMjJUYwJTlGJTg3JUI4JUYwJTlGJTg3JUFDJUU2JTk2JUIwJUU1JThBJUEwJUU1JTlEJUExMDMlRjAlOUYlOTQlOTIlRTglQTclQTMlRTklOTQlODElRTYlQjUlODElRTUlQUElOTIlRTQlQkQlOTMNCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZUMFJqZDFscWFHcE9WRXB0V2xkTk5GcEVhR3ROVVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5Mi5vZW9vZS5jbjoxOTAxNyMlRjAlOUYlODclQjglRjAlOUYlODclQUMlRTYlOTYlQjAlRTUlOEElQTAlRTUlOUQlQTEwNCVGMCU5RiU5NCU5MiVFOCVBNyVBMyVFOSU5NCU4MSVFNiVCNSU4MSVFNSVBQSU5MiVFNCVCRCU5Mw0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNlRucEZNVTFVYUd0WlZGRjNXVmROZDFsWFNtMU5RVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXkxLm9lb29lLmNuOjE5MDAxIyVGMCU5RiU4NyVBRiVGMCU5RiU4NyVCNSVFNiU5NyVBNSVFNiU5QyVBQzAxDQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VG5wRk1VMVVhR3RaVkZGM1dWZE5kMWxYU20xTlFUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTUub2Vvb2UuY246MTkwMTAjJUYwJTlGJTg3JUFGJUYwJTlGJTg3JUI1JUU2JTk3JUE1JUU2JTlDJUFDMDINCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZUbnBGTVUxVWFHdFpWRkYzV1ZkTmQxbFhTbTFOUVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5Mi5vZW9vZS5jbjoxOTAxOCMlRjAlOUYlODclQUYlRjAlOUYlODclQjUlRTYlOTclQTUlRTYlOUMlQUMwMw0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNlRWZEtiRTVVV1RGYVYxRXhXbGRPYVU5SFRYZE9VVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXkzLm9lb29lLmNuOjM0NTAxIyVGMCU5RiU4NyVBRiVGMCU5RiU4NyVCNSVFNiU5NyVBNSVFNiU5QyVBQzA0DQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VFZkS2JFNVVXVEZhVjFFeFdsZE9hVTlIVFhkT1VUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTIub2Vvb2UuY246NTUwMDIjJUYwJTlGJTg3JUFGJUYwJTlGJTg3JUI1JUU2JTk3JUE1JUU2JTlDJUFDMDUNCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZUVmRLYkU1VVdURmFWMUV4V2xkT2FVOUhUWGRPVVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5My5vZW9vZS5jbjo1NTAwMyMlRjAlOUYlODclQUYlRjAlOUYlODclQjUlRTYlOTclQTUlRTYlOUMlQUMwNg0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNlRucHJNMXBIVFRCT1ZHeHJUbnBKTTAxVVNtbE9RVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXkxLm9lb29lLmNuOjM1NjE1IyVFNiVCMyVCMCVFNSU5QiVCRCVGMCU5RiU4NyVCOSVGMCU5RiU4NyVBRDAxDQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VFZSRmVsbDZVbTFQUkUweVRVUk5lVTVVVG10UFFUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTEub2Vvb2UuY246MjU4MDIjJUYwJTlGJTg3JUE5JUYwJTlGJTg3JUFBJUU1JUJFJUI3JUU1JTlCJUJEMDENCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZUVlJGZWxsNlVtMVBSRTB5VFVSTmVVNVVUbXRQUVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5NS5vZW9vZS5jbjoyNTgwMyMlRjAlOUYlODclQTklRjAlOUYlODclQUElRTUlQkUlQjclRTUlOUIlQkQwMg0Kc3M6Ly9ZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRwbE9UZGlaVGc0T0MxbU56STRMVFJsWmpjdFltRmhZaTAzWW1Oa05UQTBOVFkwWTJVQHd5eTEub2Vvb2UuY246MjAwMjUjJUYwJTlGJTg3JUIyJUYwJTlGJTg3JUJFJUU5JUE5JUFDJUU2JTlEJUE1JUU4JUE1JUJGJUU0JUJBJTlBDQpzczovL1kyaGhZMmhoTWpBdGFXVjBaaTF3YjJ4NU1UTXdOVHBsT1RkaVpUZzRPQzFtTnpJNExUUmxaamN0WW1GaFlpMDNZbU5rTlRBME5UWTBZMlVAd3l5My5vZW9vZS5jbjoyMDExMyMlRjAlOUYlODclQTglRjAlOUYlODclQTYlRTUlOEElQTAlRTYlOEIlQkYlRTUlQTQlQTcwMQ0Kc3M6Ly9ZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRwbE9UZGlaVGc0T0MxbU56STRMVFJsWmpjdFltRmhZaTAzWW1Oa05UQTBOVFkwWTJVQHd5eTMub2Vvb2UuY246MTIwMDQjJUYwJTlGJTg3JUFFJUYwJTlGJTg3JUI4JUU1JTg2JUIwJUU1JUIyJTlCDQpzczovL1kyaGhZMmhoTWpBdGFXVjBaaTF3YjJ4NU1UTXdOVHBsT1RkaVpUZzRPQzFtTnpJNExUUmxaamN0WW1GaFlpMDNZbU5rTlRBME5UWTBZMlVAd3l5Mi5vZW9vZS5jbjoyMzQwNiMlRjAlOUYlODclQUUlRjAlOUYlODclQTklRTUlOEQlQjAlRTUlQkElQTYlRTUlQjAlQkMlRTglQTUlQkYlRTQlQkElOUEwMQ0Kc3M6Ly9ZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRwbE9UZGlaVGc0T0MxbU56STRMVFJsWmpjdFltRmhZaTAzWW1Oa05UQTBOVFkwWTJVQHd5eTMub2Vvb2UuY246NDY1MDIjJUYwJTlGJTg3JUI1JUYwJTlGJTg3JUIxJUU2JUIzJUEyJUU1JTg1JUIwMDENCnNzOi8vWTJoaFkyaGhNakF0YVdWMFppMXdiMng1TVRNd05UcGxPVGRpWlRnNE9DMW1Oekk0TFRSbFpqY3RZbUZoWWkwM1ltTmtOVEEwTlRZMFkyVUB3eXkxLm9lb29lLmNuOjIwMDIyIyVGMCU5RiU4NyVCMyVGMCU5RiU4NyVCRiVFNiU5NiVCMCVFOCVBNSVCRiVFNSU4NSVCMDAxDQpzczovL1kyaGhZMmhoTWpBdGFXVjBaaTF3YjJ4NU1UTXdOVHBsT1RkaVpUZzRPQzFtTnpJNExUUmxaamN0WW1GaFlpMDNZbU5rTlRBME5UWTBZMlVAd3l5My5vZW9vZS5jbjo0NDExMyMlRjAlOUYlODclQjAlRjAlOUYlODclQjclRTklOUYlQTklRTUlOUIlQkQwMQ0Kc3M6Ly9ZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRwbE9UZGlaVGc0T0MxbU56STRMVFJsWmpjdFltRmhZaTAzWW1Oa05UQTBOVFkwWTJVQHd5eTMub2Vvb2UuY246NTY2MTQjJUYwJTlGJTg3JUFCJUYwJTlGJTg3JUI3JUU2JUIzJTk1JUU1JTlCJUJEMDENCnNzOi8vWTJoaFkyaGhNakF0YVdWMFppMXdiMng1TVRNd05UcGxPVGRpWlRnNE9DMW1Oekk0TFRSbFpqY3RZbUZoWWkwM1ltTmtOVEEwTlRZMFkyVUB3eXkzLm9lb29lLmNuOjIwMjU0IyVGMCU5RiU4NyVBNyVGMCU5RiU4NyVBQSVFNiVBRiU5NCVFNSU4OCVBOSVFNiU5NyVCNjAxDQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VG5wT2JWcHFTbXhOUjBaclQwZE5lRnBVV1RSYVFUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTEub2Vvb2UuY246MzQzMzMjJUU4JUI2JThBJUU1JThEJTk3JUYwJTlGJTg3JUJCJUYwJTlGJTg3JUIzMDENCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZUbnBPYlZwcVNteE5SMFpyVDBkTmVGcFVXVFJhUVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5NS5vZW9vZS5jbjozNDMzNSMlRTglQjYlOEElRTUlOEQlOTclRjAlOUYlODclQkIlRjAlOUYlODclQjMwMg0Kc3M6Ly9ZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRwbE9UZGlaVGc0T0MxbU56STRMVFJsWmpjdFltRmhZaTAzWW1Oa05UQTBOVFkwWTJVQHd5eTMub2Vvb2UuY246MTkwMDQjJUYwJTlGJTg3JUE4JUYwJTlGJTg3JUIzJUU1JThGJUIwJUU2JUI5JUJFMDENCnNzOi8vWTJoaFkyaGhNakF0YVdWMFppMXdiMng1TVRNd05UcGxPVGRpWlRnNE9DMW1Oekk0TFRSbFpqY3RZbUZoWWkwM1ltTmtOVEEwTlRZMFkyVUB3eXk1Lm9lb29lLmNuOjIxMDAzIyVGMCU5RiU4NyVBOCVGMCU5RiU4NyVCMyVFNSU4RiVCMCVFNiVCOSVCRTAyDQpzczovL1kyaGhZMmhoTWpBdGFXVjBaaTF3YjJ4NU1UTXdOVHBsT1RkaVpUZzRPQzFtTnpJNExUUmxaamN0WW1GaFlpMDNZbU5rTlRBME5UWTBZMlVAd3l5MS5vZW9vZS5jbjoxOTAxOSMlRjAlOUYlODclQTglRjAlOUYlODclQjMlRTUlOEYlQjAlRTYlQjklQkUwMw0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNlRXcE9hVmw2YUdwT1ZHeG9XV3BqTTA1dFZtcFpVVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXkxLm9lb29lLmNuOjIwMDE0IyVGMCU5RiU4NyVBOCVGMCU5RiU4NyVCMyVFNSU4RiVCMCVFNiVCOSVCRTA0JUU1JUFFJUI2JUU1JUFFJUJEDQpzczovL01qQXlNaTFpYkdGclpUTXRZV1Z6TFRFeU9DMW5ZMjA2VGxSS2FVOVVUbXhQVkVKcFRucENiRnBxWTNsUFFUMDlPbHBVYXpOWmJWVTBUMFJuZEZwcVkzbFBRekF3V2xFOVBRQHd5eTUub2Vvb2UuY246Mzc4ODgjJUYwJTlGJTg3JUE4JUYwJTlGJTg3JUIzJUU1JThGJUIwJUU2JUI5JUJFJUU1JUFFJUI2JUU1JUFFJUJEMDUNCnNzOi8vTWpBeU1pMWliR0ZyWlRNdFlXVnpMVEV5T0MxblkyMDZXVlJyTWxscVJUVlBWMUV3VFdwS2EwMXFWVEZPUVQwOU9scFVhek5aYlZVMFQwUm5kRnBxWTNsUFF6QXdXbEU5UFFAd3l5MS5vZW9vZS5jbjo0NTU5MCMlRjAlOUYlODclQkElRjAlOUYlODclQjglRTclQkUlOEUlRTUlOUIlQkQwMSVFNyVCQSVCRCVFNyVCQSVBNkdQVA0Kc3M6Ly9ZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRwbE9UZGlaVGc0T0MxbU56STRMVFJsWmpjdFltRmhZaTAzWW1Oa05UQTBOVFkwWTJVQHd5eTUub2Vvb2UuY246MTkwMDUjJUYwJTlGJTg3JUJBJUYwJTlGJTg3JUI4JUU3JUJFJThFJUU1JTlCJUJEMDIlRTclQkElQkQlRTclQkElQTZHUFQNCnNzOi8vWTJoaFkyaGhNakF0YVdWMFppMXdiMng1TVRNd05UcGxPVGRpWlRnNE9DMW1Oekk0TFRSbFpqY3RZbUZoWWkwM1ltTmtOVEEwTlRZMFkyVUB3eXkyLm9lb29lLmNuOjE5MDE1IyVGMCU5RiU4NyVCQSVGMCU5RiU4NyVCOCVFNyVCRSU4RSVFNSU5QiVCRDAzJUU3JUJBJUJEJUU3JUJBJUE2R1BUDQpzczovL1kyaGhZMmhoTWpBdGFXVjBaaTF3YjJ4NU1UTXdOVHBsT1RkaVpUZzRPQzFtTnpJNExUUmxaamN0WW1GaFlpMDNZbU5rTlRBME5UWTBZMlVAd3l5Mi5vZW9vZS5jbjoxOTAyMCMlRjAlOUYlODclQkElRjAlOUYlODclQjglRTclQkUlOEUlRTUlOUIlQkQwNCVFNyVCQSVCRCVFNyVCQSVBNkdQVA0Kc3M6Ly9NakF5TWkxaWJHRnJaVE10WVdWekxURXlPQzFuWTIwNlQxZFZlRTU2VG10YWJVNW9Xa2RHYkU5RWJHdE5VVDA5T2xwVWF6TlpiVlUwVDBSbmRGcHFZM2xQUXpBd1dsRTlQUUB3eXkxLm9lb29lLmNuOjE5NzkxIyVGMCU5RiU4NyVCQSVGMCU5RiU4NyVCOCVFNyVCRSU4RSVFNSU5QiVCRDA1JUU3JUJCJUI0JUU1JThBJUEwJUU2JTk2JUFGR1BUDQpzczovL1kyaGhZMmhoTWpBdGFXVjBaaTF3YjJ4NU1UTXdOVHBsT1RkaVpUZzRPQzFtTnpJNExUUmxaamN0WW1GaFlpMDNZbU5rTlRBME5UWTBZMlVAd3l5MS5vZW9vZS5jbjoxOTAyMSMlRjAlOUYlODclQUMlRjAlOUYlODclQTclRTglOEIlQjElRTUlOUIlQkQwMQ0Kc3M6Ly9ZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRwbE9UZGlaVGc0T0MxbU56STRMVFJsWmpjdFltRmhZaTAzWW1Oa05UQTBOVFkwWTJVQHd5eTUub2Vvb2UuY246MTkwMjIjJUYwJTlGJTg3JUFDJUYwJTlGJTg3JUE3JUU4JThCJUIxJUU1JTlCJUJEMDINCg==
+port: 7890
+socks-port: 7891
+allow-lan: false
+mode: rule
+log-level: info
+geodata-mode: true
+geo-auto-update: true
+geodata-loader: standard
+geo-update-interval: 24
+geox-url:
+  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
+  geosite: >-
+    https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
+  mmdb: >-
+    https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb
+  asn: >-
+    https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
+rule-providers:
+  youtube:
+    type: http
+    format: mrs
+    behavior: domain
+    url: >-
+      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/youtube.mrs
+    path: ./ruleset/youtube.mrs
+    interval: 86400
+  geolocation-!cn:
+    type: http
+    format: mrs
+    behavior: domain
+    url: >-
+      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/geolocation-!cn.mrs
+    path: ./ruleset/geolocation-!cn.mrs
+    interval: 86400
+dns:
+  enable: true
+  ipv6: true
+  respect-rules: true
+  enhanced-mode: fake-ip
+  nameserver:
+    - https://120.53.53.53/dns-query
+    - https://223.5.5.5/dns-query
+  proxy-server-nameserver:
+    - https://120.53.53.53/dns-query
+    - https://223.5.5.5/dns-query
+  nameserver-policy:
+    geosite:cn,private:
+      - https://120.53.53.53/dns-query
+      - https://223.5.5.5/dns-query
+    geosite:geolocation-!cn:
+      - https://dns.cloudflare.com/dns-query
+      - https://dns.google/dns-query
+proxies:
+  - name: 剩余流量：91.93 GB
+    type: hysteria2
+    server: hkzl1.vyunyunnode.top
+    port: 49000
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: hkzl1.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 香港2直连
+    type: hysteria2
+    server: hkzl2.vyunyunnode.top
+    port: 50000
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: hkzl2.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 香港3直连
+    type: hysteria2
+    server: hkzl3.vyunyunnode.top
+    port: 44001
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: hkzl3.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 台湾家宽直连
+    type: hysteria2
+    server: twzl.vyunyunnode.top
+    port: 47887
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: twzl.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 美国🇺🇸直连
+    type: hysteria2
+    server: uszl2.vyunyunnode.top
+    port: 44006
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: uszl2.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 新加坡🇸🇬直连
+    type: hysteria2
+    server: sgzl1.vyunyunnode.top
+    port: 44008
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: sgzl1.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 韩国直连
+    type: hysteria2
+    server: hgzl.vyunyunnode.top
+    port: 44098
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: ''
+    skip-cert-verify: true
+  - name: 美国🇺🇸直连02
+    type: hysteria2
+    server: zzlmg2.hhwyy.xyz
+    port: 44088
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: uszl3.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 日本🇯🇵直连
+    type: hysteria2
+    server: jpzl1.vyunyunnode.top
+    port: 44011
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: jpzl1.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 🇭🇰香港01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19002
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19006
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZDJmMGExNTdiYTNmOTdmNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港03
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19008
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港04
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19009
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZDJmMGExNTdiYTNmOTdmNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港05
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19023
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港06
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19025
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港07
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19026
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWI3MTM5NjUyOTM2N2RhNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港08
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19027
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWI3MTM5NjUyOTM2N2RhNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港09
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19750
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWI3MTM5NjUyOTM2N2RhNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡01🔒解锁流媒体
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19088
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZTc2Y2VmOWMzOWI2ZDYyNg==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡02🔒解锁流媒体
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19003
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZTc2Y2VmOWMzOWI2ZDYyNg==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡03🔒解锁流媒体
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19013
+    cipher: 2022-blake3-aes-128-gcm
+    password: ODcwYjhjNTJmZWM4ZDhkMQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡04🔒解锁流媒体
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19017
+    cipher: 2022-blake3-aes-128-gcm
+    password: ODcwYjhjNTJmZWM4ZDhkMQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19001
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzE1MThkYTQwYWMwYWJmMA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19010
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzE1MThkYTQwYWMwYWJmMA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本03
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19018
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzE1MThkYTQwYWMwYWJmMA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本04
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 34501
+    cipher: 2022-blake3-aes-128-gcm
+    password: MWJlNTY1ZWQ1ZWNiOGMwNQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本05
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 55002
+    cipher: 2022-blake3-aes-128-gcm
+    password: MWJlNTY1ZWQ1ZWNiOGMwNQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本06
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 55003
+    cipher: 2022-blake3-aes-128-gcm
+    password: MWJlNTY1ZWQ1ZWNiOGMwNQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 泰国🇹🇭01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 35615
+    cipher: 2022-blake3-aes-128-gcm
+    password: Nzk3ZGM0NTlkNzI3MTJiNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇩🇪德国01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 25802
+    cipher: 2022-blake3-aes-128-gcm
+    password: MTEzYzRmODM2MDMyNTNkOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇩🇪德国02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 25803
+    cipher: 2022-blake3-aes-128-gcm
+    password: MTEzYzRmODM2MDMyNTNkOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇲🇾马来西亚
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 20025
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇦加拿大01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 20113
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇮🇸冰岛
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 12004
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇮🇩印度尼西亚01
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 23406
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇵🇱波兰01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 46502
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇳🇿新西兰01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 20022
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇰🇷韩国01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 44113
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇫🇷法国01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 56614
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇧🇪比利时01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 20254
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 越南🇻🇳01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 34333
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 越南🇻🇳02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 34335
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇨🇳台湾01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19004
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇳台湾02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 21003
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇳台湾03
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19019
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇳台湾04家宽
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 20014
+    cipher: 2022-blake3-aes-128-gcm
+    password: MjNiYzhjNTlhYjc3NmVjYQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇨🇳台湾家宽05
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 37888
+    cipher: 2022-blake3-aes-128-gcm
+    password: NTJiOTNlOTBiNzBlZjcyOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇺🇸美国01纽约GPT
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 45590
+    cipher: 2022-blake3-aes-128-gcm
+    password: YTk2YjE5OWQ0MjJkMjU1NA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇺🇸美国02纽约GPT
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19005
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇺🇸美国03纽约GPT
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19015
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇺🇸美国04纽约GPT
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19020
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇺🇸美国05维加斯GPT
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19791
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWUxNzNkZmNhZGFlODlkMQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇬🇧英国01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19021
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇬🇧英国02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19022
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 剩余流量：50 GB
+    type: vless
+    server: www.visa.cn
+    port: 80
+    uuid: 6796fdda-4633-4e3a-abd1-982d4e48ba28
+    tls: true
+    servername: usoc1.gfwsb.icu
+    network: ws
+    ws-opts:
+      path: /?ed=2048
+      headers:
+        host: usoc1.gfwsb.icu
+    tfo: false
+    skip-cert-verify: true
+  - name: '[三网优化]美国vless-2-0.75x'
+    type: vless
+    server: www.wto.org
+    port: 80
+    uuid: 6796fdda-4633-4e3a-abd1-982d4e48ba28
+    tls: true
+    servername: usoc1.gfwsb.icu
+    network: ws
+    ws-opts:
+      path: /?ed=2048
+      headers:
+        host: usoc1.gfwsb.icu
+    tfo: false
+    skip-cert-verify: true
+  - name: '[三网优化]美国vless-3-0.75x'
+    type: vless
+    server: 23133.cf.cname.vvhan.com
+    port: 80
+    uuid: 6796fdda-4633-4e3a-abd1-982d4e48ba28
+    tls: true
+    servername: usoc1.gfwsb.icu
+    network: ws
+    ws-opts:
+      path: /?ed=2048
+      headers:
+        host: usoc1.gfwsb.icu
+    tfo: false
+    skip-cert-verify: true
+proxy-groups:
+  - type: select
+    name: 🚀 节点选择
+    proxies:
+      - ⚡ 自动选择
+      - 剩余流量：91.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02
+      - 🇭🇰香港03
+      - 🇭🇰香港04
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇮🇩印度尼西亚01
+      - 🇵🇱波兰01
+      - 🇳🇿新西兰01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 剩余流量：50 GB
+      - '[三网优化]美国vless-2-0.75x'
+      - '[三网优化]美国vless-3-0.75x'
+      - DIRECT
+      - REJECT
+  - name: ⚡ 自动选择
+    type: url-test
+    proxies:
+      - 剩余流量：91.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02
+      - 🇭🇰香港03
+      - 🇭🇰香港04
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇮🇩印度尼西亚01
+      - 🇵🇱波兰01
+      - 🇳🇿新西兰01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 剩余流量：50 GB
+      - '[三网优化]美国vless-2-0.75x'
+      - '[三网优化]美国vless-3-0.75x'
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    lazy: false
+  - type: select
+    name: 📹 油管视频
+    proxies:
+      - 🚀 节点选择
+      - 剩余流量：91.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02
+      - 🇭🇰香港03
+      - 🇭🇰香港04
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇮🇩印度尼西亚01
+      - 🇵🇱波兰01
+      - 🇳🇿新西兰01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 剩余流量：50 GB
+      - '[三网优化]美国vless-2-0.75x'
+      - '[三网优化]美国vless-3-0.75x'
+      - DIRECT
+      - REJECT
+  - type: select
+    name: 🌐 非中国
+    proxies:
+      - 🚀 节点选择
+      - 剩余流量：91.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02
+      - 🇭🇰香港03
+      - 🇭🇰香港04
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇮🇩印度尼西亚01
+      - 🇵🇱波兰01
+      - 🇳🇿新西兰01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 剩余流量：50 GB
+      - '[三网优化]美国vless-2-0.75x'
+      - '[三网优化]美国vless-3-0.75x'
+      - DIRECT
+      - REJECT
+  - type: select
+    name: 🐟 漏网之鱼
+    proxies:
+      - 🚀 节点选择
+      - 剩余流量：91.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02
+      - 🇭🇰香港03
+      - 🇭🇰香港04
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇮🇩印度尼西亚01
+      - 🇵🇱波兰01
+      - 🇳🇿新西兰01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 剩余流量：50 GB
+      - '[三网优化]美国vless-2-0.75x'
+      - '[三网优化]美国vless-3-0.75x'
+      - DIRECT
+      - REJECT
+rules:
+  - RULE-SET,youtube,📹 油管视频
+  - RULE-SET,geolocation-!cn,🌐 非中国
+  - MATCH,🐟 漏网之鱼
