@@ -1,0 +1,2664 @@
+port: 7890
+socks-port: 7891
+allow-lan: false
+mode: rule
+log-level: info
+geodata-mode: true
+geo-auto-update: true
+geodata-loader: standard
+geo-update-interval: 24
+geox-url:
+  geoip: https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
+  geosite: >-
+    https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
+  mmdb: >-
+    https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/country.mmdb
+  asn: >-
+    https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
+rule-providers:
+  geolocation-cn:
+    type: http
+    format: mrs
+    behavior: domain
+    url: >-
+      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/geolocation-cn.mrs
+    path: ./ruleset/geolocation-cn.mrs
+    interval: 86400
+  cn:
+    type: http
+    format: mrs
+    behavior: ipcidr
+    url: >-
+      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/cn.mrs
+    path: ./ruleset/cn.mrs
+    interval: 86400
+  geolocation-!cn:
+    type: http
+    format: mrs
+    behavior: domain
+    url: >-
+      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/geolocation-!cn.mrs
+    path: ./ruleset/geolocation-!cn.mrs
+    interval: 86400
+dns:
+  enable: true
+  ipv6: true
+  respect-rules: true
+  enhanced-mode: fake-ip
+  nameserver:
+    - https://120.53.53.53/dns-query
+    - https://223.5.5.5/dns-query
+  proxy-server-nameserver:
+    - https://120.53.53.53/dns-query
+    - https://223.5.5.5/dns-query
+  nameserver-policy:
+    geosite:cn,private:
+      - https://120.53.53.53/dns-query
+      - https://223.5.5.5/dns-query
+    geosite:geolocation-!cn:
+      - https://dns.cloudflare.com/dns-query
+      - https://dns.google/dns-query
+proxies:
+  - name: 剩余流量：82.93 GB
+    type: hysteria2
+    server: hkzl1.vyunyunnode.top
+    port: 49000
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: hkzl1.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 香港2直连
+    type: hysteria2
+    server: hkzl2.vyunyunnode.top
+    port: 50000
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: hkzl2.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 香港3直连
+    type: hysteria2
+    server: hkzl3.vyunyunnode.top
+    port: 44001
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: hkzl3.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 台湾家宽直连
+    type: hysteria2
+    server: twzl.vyunyunnode.top
+    port: 47887
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: twzl.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 美国🇺🇸直连
+    type: hysteria2
+    server: uszl2.vyunyunnode.top
+    port: 44006
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: uszl2.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 新加坡🇸🇬直连
+    type: hysteria2
+    server: sgzl1.vyunyunnode.top
+    port: 44008
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: sgzl1.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 韩国直连
+    type: hysteria2
+    server: hgzl.vyunyunnode.top
+    port: 44098
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: ''
+    skip-cert-verify: true
+  - name: 美国🇺🇸直连02
+    type: hysteria2
+    server: zzlmg2.hhwyy.xyz
+    port: 44088
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: uszl3.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 日本🇯🇵直连
+    type: hysteria2
+    server: jpzl1.vyunyunnode.top
+    port: 44011
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+    sni: jpzl1.vyunyunnode.top
+    skip-cert-verify: true
+  - name: 🇭🇰香港01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19002
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港02解锁流媒体
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19006
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZDJmMGExNTdiYTNmOTdmNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港03
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19008
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港04解锁流媒体
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19009
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZDJmMGExNTdiYTNmOTdmNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港05
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19023
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港06
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19025
+    cipher: 2022-blake3-aes-128-gcm
+    password: MzRlY2YwNDQzMzY0OTI3OQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港07
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19026
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWI3MTM5NjUyOTM2N2RhNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港08
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19027
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWI3MTM5NjUyOTM2N2RhNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇭🇰香港09
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19750
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWI3MTM5NjUyOTM2N2RhNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡01🔒解锁流媒体
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 45689
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZTc2Y2VmOWMzOWI2ZDYyNg==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡02🔒解锁流媒体
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19003
+    cipher: 2022-blake3-aes-128-gcm
+    password: ZTc2Y2VmOWMzOWI2ZDYyNg==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡03🔒解锁流媒体
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19013
+    cipher: 2022-blake3-aes-128-gcm
+    password: ODcwYjhjNTJmZWM4ZDhkMQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇸🇬新加坡04🔒解锁流媒体
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19017
+    cipher: 2022-blake3-aes-128-gcm
+    password: ODcwYjhjNTJmZWM4ZDhkMQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19001
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzE1MThkYTQwYWMwYWJmMA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19010
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzE1MThkYTQwYWMwYWJmMA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本03
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19018
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzE1MThkYTQwYWMwYWJmMA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本04
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 34501
+    cipher: 2022-blake3-aes-128-gcm
+    password: MWJlNTY1ZWQ1ZWNiOGMwNQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本05
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 55002
+    cipher: 2022-blake3-aes-128-gcm
+    password: MWJlNTY1ZWQ1ZWNiOGMwNQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇯🇵日本06
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 55003
+    cipher: 2022-blake3-aes-128-gcm
+    password: MWJlNTY1ZWQ1ZWNiOGMwNQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 泰国🇹🇭01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 35615
+    cipher: 2022-blake3-aes-128-gcm
+    password: Nzk3ZGM0NTlkNzI3MTJiNA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇩🇪德国01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 25802
+    cipher: 2022-blake3-aes-128-gcm
+    password: MTEzYzRmODM2MDMyNTNkOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇩🇪德国02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 25803
+    cipher: 2022-blake3-aes-128-gcm
+    password: MTEzYzRmODM2MDMyNTNkOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇲🇾马来西亚
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 45800
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇦加拿大01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 20113
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇮🇸冰岛
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 12004
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇲🇽墨西哥01
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 23406
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇵🇱波兰01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 46502
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇭瑞士01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 20022
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇰🇷韩国01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 44113
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇫🇷法国01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 56614
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇧🇪比利时01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 20254
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 越南🇻🇳01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 34333
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 越南🇻🇳02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 34335
+    cipher: 2022-blake3-aes-128-gcm
+    password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇨🇳台湾01
+    type: ss
+    server: wyy3.oeooe.cn
+    port: 19004
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇳台湾02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 21003
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇳台湾03
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19019
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇨🇳台湾04家宽
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 30099
+    cipher: 2022-blake3-aes-128-gcm
+    password: NTJiOTNlOTBiNzBlZjcyOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇨🇳台湾家宽05
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 37888
+    cipher: 2022-blake3-aes-128-gcm
+    password: NTJiOTNlOTBiNzBlZjcyOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇺🇸美国01纽约GPT
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 45590
+    cipher: 2022-blake3-aes-128-gcm
+    password: YTk2YjE5OWQ0MjJkMjU1NA==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇺🇸美国02纽约GPT
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19005
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇺🇸美国03纽约GPT
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 34569
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇺🇸美国04纽约GPT
+    type: ss
+    server: wyy2.oeooe.cn
+    port: 19020
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇺🇸美国05维加斯GPT
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19791
+    cipher: 2022-blake3-aes-128-gcm
+    password: OWUxNzNkZmNhZGFlODlkMQ==:ZTk3YmU4ODgtZjcyOC00ZQ==
+  - name: 🇬🇧英国01
+    type: ss
+    server: wyy1.oeooe.cn
+    port: 19021
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 🇬🇧英国02
+    type: ss
+    server: wyy5.oeooe.cn
+    port: 19022
+    cipher: chacha20-ietf-poly1305
+    password: e97be888-f728-4ef7-baab-7bcd504564ce
+  - name: 一元机场.asia
+    type: trojan
+    server: 0.0.0.0
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: 0.0.0.0
+    network: ws
+    ws-opts: {}
+    tfo: false
+    skip-cert-verify: true
+  - name: 您正在使用的是最新客户端
+    type: vless
+    server: 0.0.0.0
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰香港 01 | 高级专线
+    type: vless
+    server: hk1.5d51af20-b66a-7922-0249-cf8779ae28f9.000d4ee1.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰香港 02 | 高级专线
+    type: vless
+    server: hk2.5d51af20-b66a-7922-0249-cf8779ae28f9.71a30608.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰香港 03 | 高级专线
+    type: vless
+    server: hk3.5d51af20-b66a-7922-0249-cf8779ae28f9.fc5d5972.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰香港 04 | 高级专线
+    type: vless
+    server: hk4.5d51af20-b66a-7922-0249-cf8779ae28f9.e69b99d9.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰香港 05 | 高级专线
+    type: vless
+    server: hk5.5d51af20-b66a-7922-0249-cf8779ae28f9.7b6e516a.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰香港 06 | 高级专线
+    type: vless
+    server: hk6.5d51af20-b66a-7922-0249-cf8779ae28f9.c0900bc3.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰香港 | 25倍计费
+    type: vless
+    server: zx1.5d51af20-b66a-7922-0249-cf8779ae28f9.f6468651.the-best-airport.com
+    port: 10000
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: baidu.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 01 | 高级专线
+    type: vless
+    server: jp1.5d51af20-b66a-7922-0249-cf8779ae28f9.272a1519.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 02 | 高级专线
+    type: vless
+    server: jp2.5d51af20-b66a-7922-0249-cf8779ae28f9.a9b0b718.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 03 | 高级专线
+    type: vless
+    server: jp3.5d51af20-b66a-7922-0249-cf8779ae28f9.ue86f537.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 04 | 高级专线
+    type: vless
+    server: jp4.5d51af20-b66a-7922-0249-cf8779ae28f9.4ce9c3b4.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 05 | 高级专线
+    type: vless
+    server: jp5.5d51af20-b66a-7922-0249-cf8779ae28f9.fabe993b.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 06 | 高级专线
+    type: vless
+    server: jp6.5d51af20-b66a-7922-0249-cf8779ae28f9.bfd39278.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 07 | 高级专线
+    type: vless
+    server: jp7.5d51af20-b66a-7922-0249-cf8779ae28f9.5132e51f.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 08 | 高级专线
+    type: vless
+    server: jp8.5d51af20-b66a-7922-0249-cf8779ae28f9.d9241b31.the-best-airport.com
+    port: 443
+    uuid: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    servername: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵日本 01 | 专线
+    type: trojan
+    server: jp1.5d51af20-b66a-7922-0249-cf8779ae28f9.7adf211e.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇯🇵日本 02 | 专线
+    type: trojan
+    server: jp2.5d51af20-b66a-7922-0249-cf8779ae28f9.02444020.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇯🇵日本 03 | 专线
+    type: trojan
+    server: jp3.5d51af20-b66a-7922-0249-cf8779ae28f9.5584fc1f.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇯🇵日本 04 | 专线
+    type: trojan
+    server: jp4.5d51af20-b66a-7922-0249-cf8779ae28f9.69408ae5.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 01 | 专线
+    type: trojan
+    server: sg1.5d51af20-b66a-7922-0249-cf8779ae28f9.2dde7df3.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 02 | 专线
+    type: trojan
+    server: sg2.5d51af20-b66a-7922-0249-cf8779ae28f9.2c4b5066.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 03 | 专线
+    type: trojan
+    server: sg3.5d51af20-b66a-7922-0249-cf8779ae28f9.d4f84ebb.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 04 | 专线
+    type: trojan
+    server: sg4.5d51af20-b66a-7922-0249-cf8779ae28f9.2ce203e5.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 05 | 专线
+    type: trojan
+    server: sg5.5d51af20-b66a-7922-0249-cf8779ae28f9.dede0d54.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 06 | 专线
+    type: trojan
+    server: sg6.5d51af20-b66a-7922-0249-cf8779ae28f9.0aca10d1.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 07 | 专线
+    type: trojan
+    server: sg7.5d51af20-b66a-7922-0249-cf8779ae28f9.57aaa8ec.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇸🇬新加坡 08 | 专线
+    type: trojan
+    server: sg8.5d51af20-b66a-7922-0249-cf8779ae28f9.c586e7c2.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇺🇸美国 01 | 专线
+    type: trojan
+    server: us1.5d51af20-b66a-7922-0249-cf8779ae28f9.36a8c922.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇺🇸美国 02 | 专线
+    type: trojan
+    server: us2.5d51af20-b66a-7922-0249-cf8779ae28f9.2f6cd430.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇺🇸美国 03 | 专线
+    type: trojan
+    server: us3.5d51af20-b66a-7922-0249-cf8779ae28f9.47253001.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 🇺🇸美国 04 | 专线
+    type: trojan
+    server: us4.5d51af20-b66a-7922-0249-cf8779ae28f9.30d6a0d0.the-best-airport.com
+    port: 443
+    password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
+    tls: true
+    sni: new.download.the-best-airport.com
+    network: tcp
+    tfo: false
+    skip-cert-verify: true
+  - name: 美国vless-do1
+    type: vless
+    server: us1do.dnscloudcloud.top
+    port: 10002
+    uuid: 688725b2-5ba9-4d78-aeef-b129ec8aa09f
+    tls: true
+    client-fingerprint: chrome
+    servername: addons.mozilla.org
+    network: tcp
+    reality-opts:
+      public-key: xnzUvDQZ4B45lUi40lFKOLWiJdPQW8LzhGsGandvvlc
+      short-id: ad081079
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 美国vless-do2
+    type: vless
+    server: us2do.dnscloudcloud.top
+    port: 10002
+    uuid: 688725b2-5ba9-4d78-aeef-b129ec8aa09f
+    tls: true
+    client-fingerprint: chrome
+    servername: addons.mozilla.org
+    network: tcp
+    reality-opts:
+      public-key: xnzUvDQZ4B45lUi40lFKOLWiJdPQW8LzhGsGandvvlc
+      short-id: ad081079
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 美国vless-do3
+    type: vless
+    server: us3do.dnscloudcloud.top
+    port: 10002
+    uuid: 688725b2-5ba9-4d78-aeef-b129ec8aa09f
+    tls: true
+    client-fingerprint: chrome
+    servername: addons.mozilla.org
+    network: tcp
+    reality-opts:
+      public-key: xnzUvDQZ4B45lUi40lFKOLWiJdPQW8LzhGsGandvvlc
+      short-id: ad081079
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 新加坡hy2-3
+    type: hysteria2
+    server: sg3.dnscloudcloud.top
+    port: 36826
+    password: 688725b2-5ba9-4d78-aeef-b129ec8aa09f
+    sni: 1231231.1234567890spcloud.com
+    skip-cert-verify: true
+  - name: 日本hy2-1
+    type: hysteria2
+    server: jp1.dnscloudcloud.top
+    port: 36657
+    password: 688725b2-5ba9-4d78-aeef-b129ec8aa09f
+    sni: 1231231.1234567890spcloud.com
+    skip-cert-verify: true
+  - name: 日本hy2-1-z
+    type: hysteria2
+    server: jp1.dnscloudcloud.top
+    port: 36090
+    password: 688725b2-5ba9-4d78-aeef-b129ec8aa09f
+    sni: 1231231.1234567890spcloud.com
+    skip-cert-verify: true
+  - name: 日本hy2-2-z
+    type: hysteria2
+    server: jp1.dnscloudcloud.top
+    port: 36744
+    password: 688725b2-5ba9-4d78-aeef-b129ec8aa09f
+    sni: 1231231.1234567890spcloud.com
+    skip-cert-verify: true
+  - name: 剩余流量：100.05+GB
+    type: vless
+    server: 69.165.68.74
+    port: 41729
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: VSu8Npx_2YAUzvuvxNGEFQqc7w7qR4sVcfPEPr6TEx0
+      short-id: 5722f432
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰HK@Eliot.H佬赞助
+    type: vless
+    server: 156.226.172.48
+    port: 37529
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: gKIcdy39rWD4fLOI_C45MQZGLtxbxfVQR6bwlJKwHm4
+      short-id: 75720fa8
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰HK@CBH佬赞助
+    type: vless
+    server: 143.20.156.89
+    port: 3344
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: 9BycpW9tNYhkzD7K4F94DOrrZJcSjZ770HHsGCbNRyc
+      short-id: e78350
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰HK@Bosa佬赞助
+    type: vless
+    server: 172.81.111.123
+    port: 3344
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: kIMVupsDeGRH_L1_vcdHyoStMkMxh5T2iv8vXjfnJiU
+      short-id: 15cf2558e503
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰HK@xingcxx佬赞助
+    type: vless
+    server: 84.54.2.244
+    port: 3344
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: Tv3o2i-JHYBA8ay7ZwUXYG3s212dUHAqBasA3ZG0vDY
+      short-id: 68e3de
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰HK@linxi_2650佬赞助
+    type: vless
+    server: 151.242.11.181
+    port: 47939
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: rgHRZ7ozcfKZLxG4CZHxwKNYqsSrafRxc3ctzZhZY0M
+      short-id: d9ab94b6
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇭🇰HK@linlee佬赞助
+    type: vless
+    server: 91.229.132.22
+    port: 1314
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: iVuN9MrFn4kNyMLcgOg-EZXlayDMxWr4mDbZEQ0L7Hw
+      short-id: e479be9de6
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇹🇼TW@ewey佬赞助
+    type: vless
+    server: 85.237.207.205
+    port: 54288
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: T8afJzzZV9IFjBxP4hUC7l_63pnMkJnoDr6LjczT_0E
+      short-id: 502f887d
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP-1@Yoga佬赞助
+    type: vless
+    server: 141.147.170.17
+    port: 55794
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: rhmzAwWbh2JyK_t3YMqoMXI9hvmbM543lbJtJ1FnFg0
+      short-id: a40e7740
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP-2@Yoga佬赞助
+    type: vless
+    server: 47.79.89.28
+    port: 63994
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: j3uEPzEcOET7XWDykVWgvOEflrH1Z7R-MdMGCXuHtBs
+      short-id: e3815d7b
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@Six-Seven佬赞助
+    type: vless
+    server: 47.79.84.104
+    port: 60236
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: 48en8jCV_izmHiSaW5wTmRjN-V4BYadWjO-pBgxCX3E
+      short-id: ce1ab303
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@Binbim佬赞助
+    type: vless
+    server: 156.246.92.242
+    port: 52111
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: te0SPJIPzqpsALKKB7wdByjgNF1yLz9En2BDapq9AE0
+      short-id: f0b120af
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@Cyclops佬赞助
+    type: vless
+    server: 45.196.233.52
+    port: 33053
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: DKRu6F8hRscl1ybIHDI7AcRkuwzH0LQUWuIim1d_vnI
+      short-id: 00dc3e
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@urcdd佬赞助
+    type: vless
+    server: 47.79.84.95
+    port: 39343
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: wY3w2KkPv5xwUbTuE9D1RXGnD8Z1HnKPvhiHWvwXGUU
+      short-id: 4c3d4637
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@dingz佬赞助
+    type: vless
+    server: 47.79.91.66
+    port: 53654
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: L8GMDv7PjGwX0ORBeVQdEfVkfLEsDEeht8sGrNQHplI
+      short-id: aca8f252
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@wjzhu佬赞助
+    type: vless
+    server: 140.245.90.74
+    port: 50931
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: C26uc12dfmQc2BvZyMxO0DsZHB3G0DwL641lnP1KwCg
+      short-id: 697273c5
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@CodeC佬赞助
+    type: vless
+    server: 47.79.37.19
+    port: 58488
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: 4hLPeRU0Rk1xlWgJ53xeNi_D0O1ZHWY7khxBFVWh2gw
+      short-id: d34c704c
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇯🇵JP@xksms佬赞助
+    type: vless
+    server: 47.79.33.248
+    port: 47938
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: RU94ywDQHJ-jav21Yj1weYJdUk-lHBv09DkEtNyOpXY
+      short-id: 7296a769
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇸🇬SG@shiyang佬赞助
+    type: vless
+    server: 178.128.104.215
+    port: 40972
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: o2rlhaSweKwEfh3ouGSmSlokeuT4CTfHaie9N07eUW4
+      short-id: b7c3d884
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇸🇬SG@cai6佬赞助
+    type: vless
+    server: 159.65.136.161
+    port: 3344
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: zcuH3bIu4eTI8hjRwiB5Z9BgZZC3qiZhcRQd9x4lm0k
+      short-id: f93fcb
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇸🇬SG@xcdeveloper佬赞助
+    type: vless
+    server: 161.118.212.29
+    port: 30917
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: AlLp_Pj5hamY19GZmED13DRRtVlj9aNFaPOgI1ibph0
+      short-id: dd7d56c9
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇸🇬SG@zea佬赞助
+    type: vless
+    server: 47.79.119.154
+    port: 46122
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: vYsj4iVNykZsaA470fENV92skTntdwFra6MsNBiceDc
+      short-id: 0a3f
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇸🇬SG@wwang佬赞助
+    type: vless
+    server: 140.245.62.49
+    port: 43936
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: _miCWM8pWj5JaUpERkqC9he-4VQR7viApaWiLmXWzgU
+      short-id: b906bf7c
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇸🇬SG@yuemanly佬赞助
+    type: vless
+    server: 185.151.146.123
+    port: 32509
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: eK6rIG7iyBH_OV_MZOYHvpK0WvvPXNZEYtfmWEbTknY
+      short-id: d17a6c37
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇸🇬SG-yltf佬赞助
+    type: vless
+    server: sg1.yltb.tech
+    port: 2053
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: cdn.jsdelivr.net
+    network: xhttp
+    reality-opts:
+      public-key: 9GKn2HGx1l55xuw7duib5j1dtLZNOJo2V_uL4Iitjj0
+    tfo: false
+    skip-cert-verify: false
+  - name: 🇺🇸US-1@LRWF佬赞助
+    type: vless
+    server: 138.197.214.79
+    port: 32236
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: pPhOIGuinYzXr1rteJPCWGjA5Xh4e4z1aMQkdUFP4l8
+      short-id: 5fbffbda
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US-2@LRWF佬赞助
+    type: vless
+    server: 159.89.153.29
+    port: 60685
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: OvBh6uauecwBrMEGX2P7tugU5vUe-ZGn7XpGxqPZJwU
+      short-id: db1de20c
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US-3@LRWF佬赞助
+    type: vless
+    server: 157.245.228.156
+    port: 46994
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: levPYRPlzIdxlR2rXm6Q2fX4khAUkSgcvTb1yviulEk
+      short-id: 8a431c65
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@Tokinx佬赞助
+    type: vless
+    server: 206.189.172.168
+    port: 33035
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: Vn_X79b3xRVmLtcMaa2qLQDZIBhMmg_O7xG7W7RL4HM
+      short-id: 4a4d56d0
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US-2@qingfenghao佬赞助
+    type: vless
+    server: 161.129.65.119
+    port: 58151
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: 0Ykahutes0212LNMXUgTbSxadUDSQsXN-vflquFgGXY
+      short-id: '47245e18'
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@yzfh佬赞助
+    type: vless
+    server: 173.214.169.120
+    port: 64035
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: SI289Xp2MDXl4qT6oluhNFpxQzzwugpIIBQMD6jO_wY
+      short-id: 85ff4d25
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@csgwu佬赞助
+    type: vless
+    server: 204.152.192.136
+    port: 58141
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: on0gHc882fX5BK3hCT03Ee_lWnIzdARnGzcjXuZOvhw
+      short-id: 245d1efc
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@hx3251佬赞助
+    type: vless
+    server: 192.210.179.29
+    port: 36644
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: URk8HznO6Z54DOasyye6v3OA3v8xOr0RDriJg-BPt0c
+      short-id: 52c6c2f3
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@goldenhawk佬赞助
+    type: vless
+    server: 107.172.51.200
+    port: 61475
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: SzWyOMyaZOuTYOlDjmWQzFp3npwTf4yRHP1QUkAD3g8
+      short-id: 0e439dd2
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@Yoga佬赞助
+    type: vless
+    server: 107.148.225.67
+    port: 61360
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: QGlSHbJjU2AiJBRYeCpKPbtl7oIhd3SthkIKlXovs10
+      short-id: 545cf8b2
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@houzai佬赞助
+    type: vless
+    server: 107.174.82.100
+    port: 3344
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: a5y-QX49e_1XYpnCo47gtsEJ07gojpWK5QNRgrcp23A
+      short-id: 2b
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@3rd佬赞助
+    type: vless
+    server: 209.141.42.234
+    port: 63749
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: eVPXkj2tjULbe9bQ_IIOciNWKjwokFAYFpxNwfKsdCA
+      short-id: e2e26a50
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@Handsomedog佬赞助
+    type: vless
+    server: 198.12.77.130
+    port: 3344
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: NI5gnv_A0UMQ1j-Niqo5pFN_q7BtCjmJhoWczCbaD04
+      short-id: 16f6ef0bdedb
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@Ling_Anthony佬赞助
+    type: vless
+    server: 107.174.181.18
+    port: 34395
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: qZWZGBwJ5OnBLshoVIh0vuXIFd4gJ3L2G-HAWx2P0k0
+      short-id: 40c59ea9
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@kikii佬赞助
+    type: vless
+    server: 107.172.87.191
+    port: 19383
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: apple.com
+    network: tcp
+    reality-opts:
+      public-key: HL4VXT0TNBpibpsxtSIL9XEp0rYXaqTRdvnO9C6vxBA
+      short-id: f794c8dfb5c0
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@Toyota佬赞助
+    type: vless
+    server: 159.65.179.221
+    port: 36671
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: tisGJ2TCl3P1XOqa1hjsgfsx6ia8vpa5T-ftdGBTcCU
+      short-id: 32ff6aad
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@lyrnox佬赞助
+    type: vless
+    server: 107.174.52.110
+    port: 30638
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: IO82kPIhQDmEPquyYmTrjsjh9387N0NvLyK0qHseD18
+      short-id: a063a883
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@TAOZHANG佬赞助
+    type: vless
+    server: 154.23.172.31
+    port: 56147
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: oSj537KpklBsUhKRaFp9mWa1MDi2xQnHf0mI74Hqpms
+      short-id: ed47cf7f
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@zwz211123佬赞助
+    type: vless
+    server: 38.34.14.69
+    port: 32268
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: cYV9MVneh9TForprrU_7ldEgqnDzBVTznh_wVvgVVUE
+      short-id: c0413524
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@laoqiao佬赞助
+    type: vless
+    server: 5.175.184.72
+    port: 41295
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: EBl_UcCMQFHTtaaNOMSbnaYdaMiTORfJQZHabH2iySA
+      short-id: 37b58ad1
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@hl128k佬赞助
+    type: vless
+    server: 23.94.212.40
+    port: 52801
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: 4INW4caLQnb9k_Nkx2_7kMuUZyzn2jndY73zAdArsx8
+      short-id: 64a02f94
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@Iguang9881佬赞助
+    type: vless
+    server: 23.226.134.134
+    port: 35874
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: wxeP5XSLK3nN-K2U0Cc2j6vS_LvTMq9hfePA4lXR5Rg
+      short-id: 166cebd6
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@123nhh佬赞助
+    type: vless
+    server: 66.92.50.235
+    port: 59211
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: vZS7qYjWMKW_29yzSfan8ZKcz3p0rmcGymklQlB7ITg
+      short-id: 5e24ebda
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US@dong佬赞助
+    type: vless
+    server: 167.99.53.187
+    port: 38062
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: RoL7AlLADybmlEg0WyJ7I52NeoTqjWHn7DC1SBpEn0E
+      short-id: e3623edd
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇨🇦CA@Tokinx佬赞助
+    type: vless
+    server: 159.203.3.63
+    port: 57433
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: xfhg5CJhIOCJVqk279495MTBIN5GMW4jPC4PlGk2WVQ
+      short-id: 93bc36db
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇨🇦CA@aaa3055佬赞助
+    type: vless
+    server: 207.174.40.215
+    port: 30547
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: FbtzoqI2rUh-ZM_YmBf3wztjVnz8iIj-qqr2vdm2fkA
+      short-id: 75ed7d66
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇮🇳IN@dingz佬赞助
+    type: vless
+    server: 80.225.206.101
+    port: 62384
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: lbblf5r9piPCEfbNHg79lDCrXrKS4Bh4OE4tp40oGhE
+      short-id: e5c85d1b
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇳🇱NL@cai6佬赞助
+    type: vless
+    server: 68.183.8.190
+    port: 3344
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: Tg0ljjeQ7V8B9rkGRxc-QA5b5fvHzsqc4ASEwIP0DHA
+      short-id: 4dc9
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇹🇷TR@Rainbear佬赞助
+    type: vless
+    server: 185.219.132.112
+    port: 34874
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: TsmdGB_RBH_88NrpfIq4h5VN3Vn4x0G7nrvQWU5G_Ws
+      short-id: cad5a0b0
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇬🇧GB@Ksoyoung佬赞助
+    type: vless
+    server: 185.85.242.140
+    port: 52868
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: vzsePL_4PUY8mU-NuLjd4m2UKTbdmmva_2UfSRgCfEI
+      short-id: da429a60
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇩🇪DE@laoqiao佬赞助
+    type: vless
+    server: 109.71.253.17
+    port: 48745
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: 0JgOrkTwXgAGOhu_OKzOjHd4VRHyXQ9ns8wj0mKNeWo
+      short-id: 0b0ddf6a
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇩🇪DE@hl128k佬赞助
+    type: vless
+    server: 31.57.241.27
+    port: 38432
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: aH2hWUwcv735PN82fd4Cnq9rvaRJX3g7GSzvqw1KeAk
+      short-id: 2727f039
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇦🇺AU@FF_Crazy佬赞助
+    type: vless
+    server: 170.64.233.74
+    port: 31874
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: kcVEhk0YL3UzCz2QsFnaM3VebHMdZ6zCiMj2i0-X41I
+      short-id: 00dc0f8d
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇲🇩MD@terence佬赞助
+    type: vless
+    server: 217.156.67.93
+    port: 47949
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: Q_eUYoTgZSez8tYJ0e519POQjk630s5Iy1mTOyAtJ18
+      short-id: ddeb6c3d
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸US-r佬赞助
+    type: vless
+    server: 154.26.184.2
+    port: 29667
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    servername: learn.cpplang.ggff.net
+    network: httpupgrade
+    tfo: false
+    skip-cert-verify: false
+  - name: 🇺🇸US-se佬赞助
+    type: vless
+    server: 38.207.162.5
+    port: 42697
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    servername: learn.cpplang.ggff.net
+    network: httpupgrade
+    tfo: false
+    skip-cert-verify: false
+  - name: 🇷🇺RU-slw佬赞助
+    type: vless
+    server: cf-ip-new.root.sx
+    port: 8443
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: www.speedtest.net
+    network: tcp
+    reality-opts:
+      public-key: tY_st1XYwQbyfsuy62K3NVBFLA30tQXu_ZDZDSvRGC8
+      short-id: d6aa8c4c
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇫🇷FR-IPV6-SeCdl佬赞助
+    type: hysteria2
+    server: 2001:41d0:d:2827:be24:11ff:fec2:7807
+    port: 1234
+    obfs: salamander
+    obfs-password: FhTMfc8q5ctAlJsV
+    password: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    sni: fr.xiaoyao-88.com
+    skip-cert-verify: true
+  - name: 🇺🇸5x家宽-1@Bosa佬赞助
+    type: ss
+    server: 47.106.93.150
+    port: 11235
+    cipher: aes-256-gcm
+    password: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+  - name: 🇺🇸US5x家宽-bai佬赞助
+    type: vless
+    server: 154.26.176.67
+    port: 10734
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    servername: learn.cpplang.ggff.net
+    network: httpupgrade
+    tfo: false
+    skip-cert-verify: false
+  - name: 🇺🇸US5x家宽-wz佬赞助
+    type: vless
+    server: 37.123.192.228
+    port: 18563
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    servername: learn.cpplang.ggff.net
+    network: httpupgrade
+    tfo: false
+    skip-cert-verify: false
+  - name: 🇺🇸5x家宽@EDWINCHENC佬赞助
+    type: vless
+    server: 23.166.168.131
+    port: 41937
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: wJ9rdkEdxYOC6N1GfuTug_AXc9GgHqCfWcPulDtADEw
+      short-id: 5dfbc3e1
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸5x家宽-2@Bosa佬赞助
+    type: vless
+    server: 174.136.204.191
+    port: 55784
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: mmfiqr-AKsrq_G4REYhfGRboSsEjh88BCMDRZRpULEo
+      short-id: a9056c57
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+  - name: 🇺🇸5x家宽-2@hkxiaoyao佬赞助
+    type: vless
+    server: 38.165.45.91
+    port: 57262
+    uuid: e49b9cb3-9cc3-49c2-b3ab-abdde722c27b
+    tls: true
+    client-fingerprint: chrome
+    servername: tesla.com
+    network: tcp
+    reality-opts:
+      public-key: YEF1Hg0m7qsATraNrxWw3OqWw2IQ93p2sVdlpOJPVBY
+      short-id: 0cfc3260
+    tfo: false
+    skip-cert-verify: false
+    flow: xtls-rprx-vision
+proxy-groups:
+  - type: select
+    name: 🚀 节点选择
+    proxies:
+      - ⚡ 自动选择
+      - 剩余流量：82.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02解锁流媒体
+      - 🇭🇰香港03
+      - 🇭🇰香港04解锁流媒体
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇲🇽墨西哥01
+      - 🇵🇱波兰01
+      - 🇨🇭瑞士01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 一元机场.asia
+      - 您正在使用的是最新客户端
+      - 🇭🇰香港 01 | 高级专线
+      - 🇭🇰香港 02 | 高级专线
+      - 🇭🇰香港 03 | 高级专线
+      - 🇭🇰香港 04 | 高级专线
+      - 🇭🇰香港 05 | 高级专线
+      - 🇭🇰香港 06 | 高级专线
+      - 🇭🇰香港 | 25倍计费
+      - 🇯🇵日本 01 | 高级专线
+      - 🇯🇵日本 02 | 高级专线
+      - 🇯🇵日本 03 | 高级专线
+      - 🇯🇵日本 04 | 高级专线
+      - 🇯🇵日本 05 | 高级专线
+      - 🇯🇵日本 06 | 高级专线
+      - 🇯🇵日本 07 | 高级专线
+      - 🇯🇵日本 08 | 高级专线
+      - 🇯🇵日本 01 | 专线
+      - 🇯🇵日本 02 | 专线
+      - 🇯🇵日本 03 | 专线
+      - 🇯🇵日本 04 | 专线
+      - 🇸🇬新加坡 01 | 专线
+      - 🇸🇬新加坡 02 | 专线
+      - 🇸🇬新加坡 03 | 专线
+      - 🇸🇬新加坡 04 | 专线
+      - 🇸🇬新加坡 05 | 专线
+      - 🇸🇬新加坡 06 | 专线
+      - 🇸🇬新加坡 07 | 专线
+      - 🇸🇬新加坡 08 | 专线
+      - 🇺🇸美国 01 | 专线
+      - 🇺🇸美国 02 | 专线
+      - 🇺🇸美国 03 | 专线
+      - 🇺🇸美国 04 | 专线
+      - 美国vless-do1
+      - 美国vless-do2
+      - 美国vless-do3
+      - 新加坡hy2-3
+      - 日本hy2-1
+      - 日本hy2-1-z
+      - 日本hy2-2-z
+      - 剩余流量：100.05+GB
+      - 🇭🇰HK@Eliot.H佬赞助
+      - 🇭🇰HK@CBH佬赞助
+      - 🇭🇰HK@Bosa佬赞助
+      - 🇭🇰HK@xingcxx佬赞助
+      - 🇭🇰HK@linxi_2650佬赞助
+      - 🇭🇰HK@linlee佬赞助
+      - 🇹🇼TW@ewey佬赞助
+      - 🇯🇵JP-1@Yoga佬赞助
+      - 🇯🇵JP-2@Yoga佬赞助
+      - 🇯🇵JP@Six-Seven佬赞助
+      - 🇯🇵JP@Binbim佬赞助
+      - 🇯🇵JP@Cyclops佬赞助
+      - 🇯🇵JP@urcdd佬赞助
+      - 🇯🇵JP@dingz佬赞助
+      - 🇯🇵JP@wjzhu佬赞助
+      - 🇯🇵JP@CodeC佬赞助
+      - 🇯🇵JP@xksms佬赞助
+      - 🇸🇬SG@shiyang佬赞助
+      - 🇸🇬SG@cai6佬赞助
+      - 🇸🇬SG@xcdeveloper佬赞助
+      - 🇸🇬SG@zea佬赞助
+      - 🇸🇬SG@wwang佬赞助
+      - 🇸🇬SG@yuemanly佬赞助
+      - 🇸🇬SG-yltf佬赞助
+      - 🇺🇸US-1@LRWF佬赞助
+      - 🇺🇸US-2@LRWF佬赞助
+      - 🇺🇸US-3@LRWF佬赞助
+      - 🇺🇸US@Tokinx佬赞助
+      - 🇺🇸US-2@qingfenghao佬赞助
+      - 🇺🇸US@yzfh佬赞助
+      - 🇺🇸US@csgwu佬赞助
+      - 🇺🇸US@hx3251佬赞助
+      - 🇺🇸US@goldenhawk佬赞助
+      - 🇺🇸US@Yoga佬赞助
+      - 🇺🇸US@houzai佬赞助
+      - 🇺🇸US@3rd佬赞助
+      - 🇺🇸US@Handsomedog佬赞助
+      - 🇺🇸US@Ling_Anthony佬赞助
+      - 🇺🇸US@kikii佬赞助
+      - 🇺🇸US@Toyota佬赞助
+      - 🇺🇸US@lyrnox佬赞助
+      - 🇺🇸US@TAOZHANG佬赞助
+      - 🇺🇸US@zwz211123佬赞助
+      - 🇺🇸US@laoqiao佬赞助
+      - 🇺🇸US@hl128k佬赞助
+      - 🇺🇸US@Iguang9881佬赞助
+      - 🇺🇸US@123nhh佬赞助
+      - 🇺🇸US@dong佬赞助
+      - 🇨🇦CA@Tokinx佬赞助
+      - 🇨🇦CA@aaa3055佬赞助
+      - 🇮🇳IN@dingz佬赞助
+      - 🇳🇱NL@cai6佬赞助
+      - 🇹🇷TR@Rainbear佬赞助
+      - 🇬🇧GB@Ksoyoung佬赞助
+      - 🇩🇪DE@laoqiao佬赞助
+      - 🇩🇪DE@hl128k佬赞助
+      - 🇦🇺AU@FF_Crazy佬赞助
+      - 🇲🇩MD@terence佬赞助
+      - 🇺🇸US-r佬赞助
+      - 🇺🇸US-se佬赞助
+      - 🇷🇺RU-slw佬赞助
+      - 🇫🇷FR-IPV6-SeCdl佬赞助
+      - 🇺🇸5x家宽-1@Bosa佬赞助
+      - 🇺🇸US5x家宽-bai佬赞助
+      - 🇺🇸US5x家宽-wz佬赞助
+      - 🇺🇸5x家宽@EDWINCHENC佬赞助
+      - 🇺🇸5x家宽-2@Bosa佬赞助
+      - 🇺🇸5x家宽-2@hkxiaoyao佬赞助
+      - DIRECT
+      - REJECT
+  - name: ⚡ 自动选择
+    type: url-test
+    proxies:
+      - 剩余流量：82.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02解锁流媒体
+      - 🇭🇰香港03
+      - 🇭🇰香港04解锁流媒体
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇲🇽墨西哥01
+      - 🇵🇱波兰01
+      - 🇨🇭瑞士01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 一元机场.asia
+      - 您正在使用的是最新客户端
+      - 🇭🇰香港 01 | 高级专线
+      - 🇭🇰香港 02 | 高级专线
+      - 🇭🇰香港 03 | 高级专线
+      - 🇭🇰香港 04 | 高级专线
+      - 🇭🇰香港 05 | 高级专线
+      - 🇭🇰香港 06 | 高级专线
+      - 🇭🇰香港 | 25倍计费
+      - 🇯🇵日本 01 | 高级专线
+      - 🇯🇵日本 02 | 高级专线
+      - 🇯🇵日本 03 | 高级专线
+      - 🇯🇵日本 04 | 高级专线
+      - 🇯🇵日本 05 | 高级专线
+      - 🇯🇵日本 06 | 高级专线
+      - 🇯🇵日本 07 | 高级专线
+      - 🇯🇵日本 08 | 高级专线
+      - 🇯🇵日本 01 | 专线
+      - 🇯🇵日本 02 | 专线
+      - 🇯🇵日本 03 | 专线
+      - 🇯🇵日本 04 | 专线
+      - 🇸🇬新加坡 01 | 专线
+      - 🇸🇬新加坡 02 | 专线
+      - 🇸🇬新加坡 03 | 专线
+      - 🇸🇬新加坡 04 | 专线
+      - 🇸🇬新加坡 05 | 专线
+      - 🇸🇬新加坡 06 | 专线
+      - 🇸🇬新加坡 07 | 专线
+      - 🇸🇬新加坡 08 | 专线
+      - 🇺🇸美国 01 | 专线
+      - 🇺🇸美国 02 | 专线
+      - 🇺🇸美国 03 | 专线
+      - 🇺🇸美国 04 | 专线
+      - 美国vless-do1
+      - 美国vless-do2
+      - 美国vless-do3
+      - 新加坡hy2-3
+      - 日本hy2-1
+      - 日本hy2-1-z
+      - 日本hy2-2-z
+      - 剩余流量：100.05+GB
+      - 🇭🇰HK@Eliot.H佬赞助
+      - 🇭🇰HK@CBH佬赞助
+      - 🇭🇰HK@Bosa佬赞助
+      - 🇭🇰HK@xingcxx佬赞助
+      - 🇭🇰HK@linxi_2650佬赞助
+      - 🇭🇰HK@linlee佬赞助
+      - 🇹🇼TW@ewey佬赞助
+      - 🇯🇵JP-1@Yoga佬赞助
+      - 🇯🇵JP-2@Yoga佬赞助
+      - 🇯🇵JP@Six-Seven佬赞助
+      - 🇯🇵JP@Binbim佬赞助
+      - 🇯🇵JP@Cyclops佬赞助
+      - 🇯🇵JP@urcdd佬赞助
+      - 🇯🇵JP@dingz佬赞助
+      - 🇯🇵JP@wjzhu佬赞助
+      - 🇯🇵JP@CodeC佬赞助
+      - 🇯🇵JP@xksms佬赞助
+      - 🇸🇬SG@shiyang佬赞助
+      - 🇸🇬SG@cai6佬赞助
+      - 🇸🇬SG@xcdeveloper佬赞助
+      - 🇸🇬SG@zea佬赞助
+      - 🇸🇬SG@wwang佬赞助
+      - 🇸🇬SG@yuemanly佬赞助
+      - 🇸🇬SG-yltf佬赞助
+      - 🇺🇸US-1@LRWF佬赞助
+      - 🇺🇸US-2@LRWF佬赞助
+      - 🇺🇸US-3@LRWF佬赞助
+      - 🇺🇸US@Tokinx佬赞助
+      - 🇺🇸US-2@qingfenghao佬赞助
+      - 🇺🇸US@yzfh佬赞助
+      - 🇺🇸US@csgwu佬赞助
+      - 🇺🇸US@hx3251佬赞助
+      - 🇺🇸US@goldenhawk佬赞助
+      - 🇺🇸US@Yoga佬赞助
+      - 🇺🇸US@houzai佬赞助
+      - 🇺🇸US@3rd佬赞助
+      - 🇺🇸US@Handsomedog佬赞助
+      - 🇺🇸US@Ling_Anthony佬赞助
+      - 🇺🇸US@kikii佬赞助
+      - 🇺🇸US@Toyota佬赞助
+      - 🇺🇸US@lyrnox佬赞助
+      - 🇺🇸US@TAOZHANG佬赞助
+      - 🇺🇸US@zwz211123佬赞助
+      - 🇺🇸US@laoqiao佬赞助
+      - 🇺🇸US@hl128k佬赞助
+      - 🇺🇸US@Iguang9881佬赞助
+      - 🇺🇸US@123nhh佬赞助
+      - 🇺🇸US@dong佬赞助
+      - 🇨🇦CA@Tokinx佬赞助
+      - 🇨🇦CA@aaa3055佬赞助
+      - 🇮🇳IN@dingz佬赞助
+      - 🇳🇱NL@cai6佬赞助
+      - 🇹🇷TR@Rainbear佬赞助
+      - 🇬🇧GB@Ksoyoung佬赞助
+      - 🇩🇪DE@laoqiao佬赞助
+      - 🇩🇪DE@hl128k佬赞助
+      - 🇦🇺AU@FF_Crazy佬赞助
+      - 🇲🇩MD@terence佬赞助
+      - 🇺🇸US-r佬赞助
+      - 🇺🇸US-se佬赞助
+      - 🇷🇺RU-slw佬赞助
+      - 🇫🇷FR-IPV6-SeCdl佬赞助
+      - 🇺🇸5x家宽-1@Bosa佬赞助
+      - 🇺🇸US5x家宽-bai佬赞助
+      - 🇺🇸US5x家宽-wz佬赞助
+      - 🇺🇸5x家宽@EDWINCHENC佬赞助
+      - 🇺🇸5x家宽-2@Bosa佬赞助
+      - 🇺🇸5x家宽-2@hkxiaoyao佬赞助
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    lazy: false
+  - type: select
+    name: 🔒 国内服务
+    proxies:
+      - 🚀 节点选择
+      - 剩余流量：82.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02解锁流媒体
+      - 🇭🇰香港03
+      - 🇭🇰香港04解锁流媒体
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇲🇽墨西哥01
+      - 🇵🇱波兰01
+      - 🇨🇭瑞士01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 一元机场.asia
+      - 您正在使用的是最新客户端
+      - 🇭🇰香港 01 | 高级专线
+      - 🇭🇰香港 02 | 高级专线
+      - 🇭🇰香港 03 | 高级专线
+      - 🇭🇰香港 04 | 高级专线
+      - 🇭🇰香港 05 | 高级专线
+      - 🇭🇰香港 06 | 高级专线
+      - 🇭🇰香港 | 25倍计费
+      - 🇯🇵日本 01 | 高级专线
+      - 🇯🇵日本 02 | 高级专线
+      - 🇯🇵日本 03 | 高级专线
+      - 🇯🇵日本 04 | 高级专线
+      - 🇯🇵日本 05 | 高级专线
+      - 🇯🇵日本 06 | 高级专线
+      - 🇯🇵日本 07 | 高级专线
+      - 🇯🇵日本 08 | 高级专线
+      - 🇯🇵日本 01 | 专线
+      - 🇯🇵日本 02 | 专线
+      - 🇯🇵日本 03 | 专线
+      - 🇯🇵日本 04 | 专线
+      - 🇸🇬新加坡 01 | 专线
+      - 🇸🇬新加坡 02 | 专线
+      - 🇸🇬新加坡 03 | 专线
+      - 🇸🇬新加坡 04 | 专线
+      - 🇸🇬新加坡 05 | 专线
+      - 🇸🇬新加坡 06 | 专线
+      - 🇸🇬新加坡 07 | 专线
+      - 🇸🇬新加坡 08 | 专线
+      - 🇺🇸美国 01 | 专线
+      - 🇺🇸美国 02 | 专线
+      - 🇺🇸美国 03 | 专线
+      - 🇺🇸美国 04 | 专线
+      - 美国vless-do1
+      - 美国vless-do2
+      - 美国vless-do3
+      - 新加坡hy2-3
+      - 日本hy2-1
+      - 日本hy2-1-z
+      - 日本hy2-2-z
+      - 剩余流量：100.05+GB
+      - 🇭🇰HK@Eliot.H佬赞助
+      - 🇭🇰HK@CBH佬赞助
+      - 🇭🇰HK@Bosa佬赞助
+      - 🇭🇰HK@xingcxx佬赞助
+      - 🇭🇰HK@linxi_2650佬赞助
+      - 🇭🇰HK@linlee佬赞助
+      - 🇹🇼TW@ewey佬赞助
+      - 🇯🇵JP-1@Yoga佬赞助
+      - 🇯🇵JP-2@Yoga佬赞助
+      - 🇯🇵JP@Six-Seven佬赞助
+      - 🇯🇵JP@Binbim佬赞助
+      - 🇯🇵JP@Cyclops佬赞助
+      - 🇯🇵JP@urcdd佬赞助
+      - 🇯🇵JP@dingz佬赞助
+      - 🇯🇵JP@wjzhu佬赞助
+      - 🇯🇵JP@CodeC佬赞助
+      - 🇯🇵JP@xksms佬赞助
+      - 🇸🇬SG@shiyang佬赞助
+      - 🇸🇬SG@cai6佬赞助
+      - 🇸🇬SG@xcdeveloper佬赞助
+      - 🇸🇬SG@zea佬赞助
+      - 🇸🇬SG@wwang佬赞助
+      - 🇸🇬SG@yuemanly佬赞助
+      - 🇸🇬SG-yltf佬赞助
+      - 🇺🇸US-1@LRWF佬赞助
+      - 🇺🇸US-2@LRWF佬赞助
+      - 🇺🇸US-3@LRWF佬赞助
+      - 🇺🇸US@Tokinx佬赞助
+      - 🇺🇸US-2@qingfenghao佬赞助
+      - 🇺🇸US@yzfh佬赞助
+      - 🇺🇸US@csgwu佬赞助
+      - 🇺🇸US@hx3251佬赞助
+      - 🇺🇸US@goldenhawk佬赞助
+      - 🇺🇸US@Yoga佬赞助
+      - 🇺🇸US@houzai佬赞助
+      - 🇺🇸US@3rd佬赞助
+      - 🇺🇸US@Handsomedog佬赞助
+      - 🇺🇸US@Ling_Anthony佬赞助
+      - 🇺🇸US@kikii佬赞助
+      - 🇺🇸US@Toyota佬赞助
+      - 🇺🇸US@lyrnox佬赞助
+      - 🇺🇸US@TAOZHANG佬赞助
+      - 🇺🇸US@zwz211123佬赞助
+      - 🇺🇸US@laoqiao佬赞助
+      - 🇺🇸US@hl128k佬赞助
+      - 🇺🇸US@Iguang9881佬赞助
+      - 🇺🇸US@123nhh佬赞助
+      - 🇺🇸US@dong佬赞助
+      - 🇨🇦CA@Tokinx佬赞助
+      - 🇨🇦CA@aaa3055佬赞助
+      - 🇮🇳IN@dingz佬赞助
+      - 🇳🇱NL@cai6佬赞助
+      - 🇹🇷TR@Rainbear佬赞助
+      - 🇬🇧GB@Ksoyoung佬赞助
+      - 🇩🇪DE@laoqiao佬赞助
+      - 🇩🇪DE@hl128k佬赞助
+      - 🇦🇺AU@FF_Crazy佬赞助
+      - 🇲🇩MD@terence佬赞助
+      - 🇺🇸US-r佬赞助
+      - 🇺🇸US-se佬赞助
+      - 🇷🇺RU-slw佬赞助
+      - 🇫🇷FR-IPV6-SeCdl佬赞助
+      - 🇺🇸5x家宽-1@Bosa佬赞助
+      - 🇺🇸US5x家宽-bai佬赞助
+      - 🇺🇸US5x家宽-wz佬赞助
+      - 🇺🇸5x家宽@EDWINCHENC佬赞助
+      - 🇺🇸5x家宽-2@Bosa佬赞助
+      - 🇺🇸5x家宽-2@hkxiaoyao佬赞助
+      - DIRECT
+      - REJECT
+  - type: select
+    name: 🌐 非中国
+    proxies:
+      - 🚀 节点选择
+      - 剩余流量：82.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02解锁流媒体
+      - 🇭🇰香港03
+      - 🇭🇰香港04解锁流媒体
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇲🇽墨西哥01
+      - 🇵🇱波兰01
+      - 🇨🇭瑞士01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 一元机场.asia
+      - 您正在使用的是最新客户端
+      - 🇭🇰香港 01 | 高级专线
+      - 🇭🇰香港 02 | 高级专线
+      - 🇭🇰香港 03 | 高级专线
+      - 🇭🇰香港 04 | 高级专线
+      - 🇭🇰香港 05 | 高级专线
+      - 🇭🇰香港 06 | 高级专线
+      - 🇭🇰香港 | 25倍计费
+      - 🇯🇵日本 01 | 高级专线
+      - 🇯🇵日本 02 | 高级专线
+      - 🇯🇵日本 03 | 高级专线
+      - 🇯🇵日本 04 | 高级专线
+      - 🇯🇵日本 05 | 高级专线
+      - 🇯🇵日本 06 | 高级专线
+      - 🇯🇵日本 07 | 高级专线
+      - 🇯🇵日本 08 | 高级专线
+      - 🇯🇵日本 01 | 专线
+      - 🇯🇵日本 02 | 专线
+      - 🇯🇵日本 03 | 专线
+      - 🇯🇵日本 04 | 专线
+      - 🇸🇬新加坡 01 | 专线
+      - 🇸🇬新加坡 02 | 专线
+      - 🇸🇬新加坡 03 | 专线
+      - 🇸🇬新加坡 04 | 专线
+      - 🇸🇬新加坡 05 | 专线
+      - 🇸🇬新加坡 06 | 专线
+      - 🇸🇬新加坡 07 | 专线
+      - 🇸🇬新加坡 08 | 专线
+      - 🇺🇸美国 01 | 专线
+      - 🇺🇸美国 02 | 专线
+      - 🇺🇸美国 03 | 专线
+      - 🇺🇸美国 04 | 专线
+      - 美国vless-do1
+      - 美国vless-do2
+      - 美国vless-do3
+      - 新加坡hy2-3
+      - 日本hy2-1
+      - 日本hy2-1-z
+      - 日本hy2-2-z
+      - 剩余流量：100.05+GB
+      - 🇭🇰HK@Eliot.H佬赞助
+      - 🇭🇰HK@CBH佬赞助
+      - 🇭🇰HK@Bosa佬赞助
+      - 🇭🇰HK@xingcxx佬赞助
+      - 🇭🇰HK@linxi_2650佬赞助
+      - 🇭🇰HK@linlee佬赞助
+      - 🇹🇼TW@ewey佬赞助
+      - 🇯🇵JP-1@Yoga佬赞助
+      - 🇯🇵JP-2@Yoga佬赞助
+      - 🇯🇵JP@Six-Seven佬赞助
+      - 🇯🇵JP@Binbim佬赞助
+      - 🇯🇵JP@Cyclops佬赞助
+      - 🇯🇵JP@urcdd佬赞助
+      - 🇯🇵JP@dingz佬赞助
+      - 🇯🇵JP@wjzhu佬赞助
+      - 🇯🇵JP@CodeC佬赞助
+      - 🇯🇵JP@xksms佬赞助
+      - 🇸🇬SG@shiyang佬赞助
+      - 🇸🇬SG@cai6佬赞助
+      - 🇸🇬SG@xcdeveloper佬赞助
+      - 🇸🇬SG@zea佬赞助
+      - 🇸🇬SG@wwang佬赞助
+      - 🇸🇬SG@yuemanly佬赞助
+      - 🇸🇬SG-yltf佬赞助
+      - 🇺🇸US-1@LRWF佬赞助
+      - 🇺🇸US-2@LRWF佬赞助
+      - 🇺🇸US-3@LRWF佬赞助
+      - 🇺🇸US@Tokinx佬赞助
+      - 🇺🇸US-2@qingfenghao佬赞助
+      - 🇺🇸US@yzfh佬赞助
+      - 🇺🇸US@csgwu佬赞助
+      - 🇺🇸US@hx3251佬赞助
+      - 🇺🇸US@goldenhawk佬赞助
+      - 🇺🇸US@Yoga佬赞助
+      - 🇺🇸US@houzai佬赞助
+      - 🇺🇸US@3rd佬赞助
+      - 🇺🇸US@Handsomedog佬赞助
+      - 🇺🇸US@Ling_Anthony佬赞助
+      - 🇺🇸US@kikii佬赞助
+      - 🇺🇸US@Toyota佬赞助
+      - 🇺🇸US@lyrnox佬赞助
+      - 🇺🇸US@TAOZHANG佬赞助
+      - 🇺🇸US@zwz211123佬赞助
+      - 🇺🇸US@laoqiao佬赞助
+      - 🇺🇸US@hl128k佬赞助
+      - 🇺🇸US@Iguang9881佬赞助
+      - 🇺🇸US@123nhh佬赞助
+      - 🇺🇸US@dong佬赞助
+      - 🇨🇦CA@Tokinx佬赞助
+      - 🇨🇦CA@aaa3055佬赞助
+      - 🇮🇳IN@dingz佬赞助
+      - 🇳🇱NL@cai6佬赞助
+      - 🇹🇷TR@Rainbear佬赞助
+      - 🇬🇧GB@Ksoyoung佬赞助
+      - 🇩🇪DE@laoqiao佬赞助
+      - 🇩🇪DE@hl128k佬赞助
+      - 🇦🇺AU@FF_Crazy佬赞助
+      - 🇲🇩MD@terence佬赞助
+      - 🇺🇸US-r佬赞助
+      - 🇺🇸US-se佬赞助
+      - 🇷🇺RU-slw佬赞助
+      - 🇫🇷FR-IPV6-SeCdl佬赞助
+      - 🇺🇸5x家宽-1@Bosa佬赞助
+      - 🇺🇸US5x家宽-bai佬赞助
+      - 🇺🇸US5x家宽-wz佬赞助
+      - 🇺🇸5x家宽@EDWINCHENC佬赞助
+      - 🇺🇸5x家宽-2@Bosa佬赞助
+      - 🇺🇸5x家宽-2@hkxiaoyao佬赞助
+      - DIRECT
+      - REJECT
+  - type: select
+    name: 🐟 漏网之鱼
+    proxies:
+      - 🚀 节点选择
+      - 剩余流量：82.93 GB
+      - 香港2直连
+      - 香港3直连
+      - 台湾家宽直连
+      - 美国🇺🇸直连
+      - 新加坡🇸🇬直连
+      - 韩国直连
+      - 美国🇺🇸直连02
+      - 日本🇯🇵直连
+      - 🇭🇰香港01
+      - 🇭🇰香港02解锁流媒体
+      - 🇭🇰香港03
+      - 🇭🇰香港04解锁流媒体
+      - 🇭🇰香港05
+      - 🇭🇰香港06
+      - 🇭🇰香港07
+      - 🇭🇰香港08
+      - 🇭🇰香港09
+      - 🇸🇬新加坡01🔒解锁流媒体
+      - 🇸🇬新加坡02🔒解锁流媒体
+      - 🇸🇬新加坡03🔒解锁流媒体
+      - 🇸🇬新加坡04🔒解锁流媒体
+      - 🇯🇵日本01
+      - 🇯🇵日本02
+      - 🇯🇵日本03
+      - 🇯🇵日本04
+      - 🇯🇵日本05
+      - 🇯🇵日本06
+      - 泰国🇹🇭01
+      - 🇩🇪德国01
+      - 🇩🇪德国02
+      - 🇲🇾马来西亚
+      - 🇨🇦加拿大01
+      - 🇮🇸冰岛
+      - 🇲🇽墨西哥01
+      - 🇵🇱波兰01
+      - 🇨🇭瑞士01
+      - 🇰🇷韩国01
+      - 🇫🇷法国01
+      - 🇧🇪比利时01
+      - 越南🇻🇳01
+      - 越南🇻🇳02
+      - 🇨🇳台湾01
+      - 🇨🇳台湾02
+      - 🇨🇳台湾03
+      - 🇨🇳台湾04家宽
+      - 🇨🇳台湾家宽05
+      - 🇺🇸美国01纽约GPT
+      - 🇺🇸美国02纽约GPT
+      - 🇺🇸美国03纽约GPT
+      - 🇺🇸美国04纽约GPT
+      - 🇺🇸美国05维加斯GPT
+      - 🇬🇧英国01
+      - 🇬🇧英国02
+      - 一元机场.asia
+      - 您正在使用的是最新客户端
+      - 🇭🇰香港 01 | 高级专线
+      - 🇭🇰香港 02 | 高级专线
+      - 🇭🇰香港 03 | 高级专线
+      - 🇭🇰香港 04 | 高级专线
+      - 🇭🇰香港 05 | 高级专线
+      - 🇭🇰香港 06 | 高级专线
+      - 🇭🇰香港 | 25倍计费
+      - 🇯🇵日本 01 | 高级专线
+      - 🇯🇵日本 02 | 高级专线
+      - 🇯🇵日本 03 | 高级专线
+      - 🇯🇵日本 04 | 高级专线
+      - 🇯🇵日本 05 | 高级专线
+      - 🇯🇵日本 06 | 高级专线
+      - 🇯🇵日本 07 | 高级专线
+      - 🇯🇵日本 08 | 高级专线
+      - 🇯🇵日本 01 | 专线
+      - 🇯🇵日本 02 | 专线
+      - 🇯🇵日本 03 | 专线
+      - 🇯🇵日本 04 | 专线
+      - 🇸🇬新加坡 01 | 专线
+      - 🇸🇬新加坡 02 | 专线
+      - 🇸🇬新加坡 03 | 专线
+      - 🇸🇬新加坡 04 | 专线
+      - 🇸🇬新加坡 05 | 专线
+      - 🇸🇬新加坡 06 | 专线
+      - 🇸🇬新加坡 07 | 专线
+      - 🇸🇬新加坡 08 | 专线
+      - 🇺🇸美国 01 | 专线
+      - 🇺🇸美国 02 | 专线
+      - 🇺🇸美国 03 | 专线
+      - 🇺🇸美国 04 | 专线
+      - 美国vless-do1
+      - 美国vless-do2
+      - 美国vless-do3
+      - 新加坡hy2-3
+      - 日本hy2-1
+      - 日本hy2-1-z
+      - 日本hy2-2-z
+      - 剩余流量：100.05+GB
+      - 🇭🇰HK@Eliot.H佬赞助
+      - 🇭🇰HK@CBH佬赞助
+      - 🇭🇰HK@Bosa佬赞助
+      - 🇭🇰HK@xingcxx佬赞助
+      - 🇭🇰HK@linxi_2650佬赞助
+      - 🇭🇰HK@linlee佬赞助
+      - 🇹🇼TW@ewey佬赞助
+      - 🇯🇵JP-1@Yoga佬赞助
+      - 🇯🇵JP-2@Yoga佬赞助
+      - 🇯🇵JP@Six-Seven佬赞助
+      - 🇯🇵JP@Binbim佬赞助
+      - 🇯🇵JP@Cyclops佬赞助
+      - 🇯🇵JP@urcdd佬赞助
+      - 🇯🇵JP@dingz佬赞助
+      - 🇯🇵JP@wjzhu佬赞助
+      - 🇯🇵JP@CodeC佬赞助
+      - 🇯🇵JP@xksms佬赞助
+      - 🇸🇬SG@shiyang佬赞助
+      - 🇸🇬SG@cai6佬赞助
+      - 🇸🇬SG@xcdeveloper佬赞助
+      - 🇸🇬SG@zea佬赞助
+      - 🇸🇬SG@wwang佬赞助
+      - 🇸🇬SG@yuemanly佬赞助
+      - 🇸🇬SG-yltf佬赞助
+      - 🇺🇸US-1@LRWF佬赞助
+      - 🇺🇸US-2@LRWF佬赞助
+      - 🇺🇸US-3@LRWF佬赞助
+      - 🇺🇸US@Tokinx佬赞助
+      - 🇺🇸US-2@qingfenghao佬赞助
+      - 🇺🇸US@yzfh佬赞助
+      - 🇺🇸US@csgwu佬赞助
+      - 🇺🇸US@hx3251佬赞助
+      - 🇺🇸US@goldenhawk佬赞助
+      - 🇺🇸US@Yoga佬赞助
+      - 🇺🇸US@houzai佬赞助
+      - 🇺🇸US@3rd佬赞助
+      - 🇺🇸US@Handsomedog佬赞助
+      - 🇺🇸US@Ling_Anthony佬赞助
+      - 🇺🇸US@kikii佬赞助
+      - 🇺🇸US@Toyota佬赞助
+      - 🇺🇸US@lyrnox佬赞助
+      - 🇺🇸US@TAOZHANG佬赞助
+      - 🇺🇸US@zwz211123佬赞助
+      - 🇺🇸US@laoqiao佬赞助
+      - 🇺🇸US@hl128k佬赞助
+      - 🇺🇸US@Iguang9881佬赞助
+      - 🇺🇸US@123nhh佬赞助
+      - 🇺🇸US@dong佬赞助
+      - 🇨🇦CA@Tokinx佬赞助
+      - 🇨🇦CA@aaa3055佬赞助
+      - 🇮🇳IN@dingz佬赞助
+      - 🇳🇱NL@cai6佬赞助
+      - 🇹🇷TR@Rainbear佬赞助
+      - 🇬🇧GB@Ksoyoung佬赞助
+      - 🇩🇪DE@laoqiao佬赞助
+      - 🇩🇪DE@hl128k佬赞助
+      - 🇦🇺AU@FF_Crazy佬赞助
+      - 🇲🇩MD@terence佬赞助
+      - 🇺🇸US-r佬赞助
+      - 🇺🇸US-se佬赞助
+      - 🇷🇺RU-slw佬赞助
+      - 🇫🇷FR-IPV6-SeCdl佬赞助
+      - 🇺🇸5x家宽-1@Bosa佬赞助
+      - 🇺🇸US5x家宽-bai佬赞助
+      - 🇺🇸US5x家宽-wz佬赞助
+      - 🇺🇸5x家宽@EDWINCHENC佬赞助
+      - 🇺🇸5x家宽-2@Bosa佬赞助
+      - 🇺🇸5x家宽-2@hkxiaoyao佬赞助
+      - DIRECT
+      - REJECT
+rules:
+  - RULE-SET,geolocation-cn,🔒 国内服务
+  - RULE-SET,cn,🔒 国内服务
+  - RULE-SET,geolocation-!cn,🌐 非中国
+  - RULE-SET,cn,🔒 国内服务,no-resolve
+  - MATCH,🐟 漏网之鱼
