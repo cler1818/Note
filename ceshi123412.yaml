@@ -17,7 +17,7 @@ geox-url:
     https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
 rule-providers:
   google:
-    type: http
+    输入: http
     format: mrs
     behavior: ipcidr
     url: >-
@@ -25,7 +25,7 @@ rule-providers:
     path: ./ruleset/google.mrs
     interval: 86400
   geolocation-!cn:
-    type: http
+    输入: http
     format: mrs
     behavior: domain
     url: >-
@@ -265,85 +265,85 @@ proxies:
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇲🇽墨西哥01
-    type: ss
+    输入: ss
     server: wyy2.oeooe.cn
     port: 23406
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇵🇱波兰01
-    type: ss
+    输入: ss
     server: wyy3.oeooe.cn
     port: 46502
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇭瑞士01
-    type: ss
+    输入: ss
     server: wyy1.oeooe.cn
     port: 32222
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇰🇷韩国01
-    type: ss
+    输入: ss
     server: wyy3.oeooe.cn
     port: 44113
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇫🇷法国01
-    type: ss
+    输入: ss
     server: wyy3.oeooe.cn
     port: 56614
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇧🇪比利时01
-    type: ss
+    输入: ss
     server: wyy3.oeooe.cn
     port: 20254
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 越南🇻🇳01
-    type: ss
+    输入: ss
     server: wyy1.oeooe.cn
     port: 34333
     cipher: 2022-blake3-aes-128-gcm
     password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 越南🇻🇳02
-    type: ss
+    输入: ss
     server: wyy5.oeooe.cn
     port: 34335
     cipher: 2022-blake3-aes-128-gcm
     password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 🇨🇳台湾01
-    type: ss
+    输入: ss
     server: wyy3.oeooe.cn
     port: 19004
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇳台湾02
-    type: ss
+    输入: ss
     server: wyy5.oeooe.cn
     port: 21003
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇳台湾03
-    type: ss
+    输入: ss
     server: wyy1.oeooe.cn
     port: 19019
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇳台湾04家宽
-    type: ss
+    输入: ss
     server: wyy1.oeooe.cn
     port: 30099
     cipher: 2022-blake3-aes-128-gcm
     password: NTJiOTNlOTBiNzBlZjcyOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 🇨🇳台湾家宽05
-    type: ss
+    输入: ss
     server: wyy5.oeooe.cn
     port: 37888
     cipher: 2022-blake3-aes-128-gcm
     password: NTJiOTNlOTBiNzBlZjcyOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 🇺🇸美国01纽约GPT
-    type: ss
+    输入: ss
     server: wyy1.oeooe.cn
     port: 45590
     cipher: 2022-blake3-aes-128-gcm
