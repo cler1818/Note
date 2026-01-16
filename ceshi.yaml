@@ -17,7 +17,7 @@ geox-url:
     https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
 rule-providers:
   category-ai-!cn:
-    type: http
+    输入: http
     format: mrs
     behavior: domain
     url: >-
@@ -1823,7 +1823,6 @@ rules:
   - RULE-SET,category-ai-!cn,💬 AI 服务
   - RULE-SET,youtube,📹 油管视频
   - RULE-SET,google,🔍 谷歌服务
-  - RULE-SET,geolocation-cn,🔒 国内服务
   - RULE-SET,cn,🔒 国内服务
   - RULE-SET,github,🐱 Github
   - RULE-SET,gitlab,🐱 Github
