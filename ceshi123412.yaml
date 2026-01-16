@@ -17,7 +17,7 @@ geox-url:
     https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
 rule-providers:
   google:
-    输入: http
+    type: http
     format: mrs
     behavior: ipcidr
     url: >-
@@ -25,7 +25,7 @@ rule-providers:
     path: ./ruleset/google.mrs
     interval: 86400
   geolocation-!cn:
-    输入: http
+    type: http
     format: mrs
     behavior: domain
     url: >-
@@ -51,7 +51,7 @@ dns:
       - https://dns.cloudflare.com/dns-query
       - https://dns.google/dns-query
 proxies:
-  - name: 剩余流量：89.24 GB
+  - name: 剩余流量：89.18 GB
     type: hysteria2
     server: hkzl1.vyunyunnode.top
     port: 49000
@@ -265,85 +265,85 @@ proxies:
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇲🇽墨西哥01
-    输入: ss
+    type: ss
     server: wyy2.oeooe.cn
     port: 23406
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇵🇱波兰01
-    输入: ss
+    type: ss
     server: wyy3.oeooe.cn
     port: 46502
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇭瑞士01
-    输入: ss
+    type: ss
     server: wyy1.oeooe.cn
     port: 32222
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇰🇷韩国01
-    输入: ss
+    type: ss
     server: wyy3.oeooe.cn
     port: 44113
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇫🇷法国01
-    输入: ss
+    type: ss
     server: wyy3.oeooe.cn
     port: 56614
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇧🇪比利时01
-    输入: ss
+    type: ss
     server: wyy3.oeooe.cn
     port: 20254
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 越南🇻🇳01
-    输入: ss
+    type: ss
     server: wyy1.oeooe.cn
     port: 34333
     cipher: 2022-blake3-aes-128-gcm
     password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 越南🇻🇳02
-    输入: ss
+    type: ss
     server: wyy5.oeooe.cn
     port: 34335
     cipher: 2022-blake3-aes-128-gcm
     password: NzNmZjJlMGFkOGMxZTY4ZA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 🇨🇳台湾01
-    输入: ss
+    type: ss
     server: wyy3.oeooe.cn
     port: 19004
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇳台湾02
-    输入: ss
+    type: ss
     server: wyy5.oeooe.cn
     port: 21003
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇳台湾03
-    输入: ss
+    type: ss
     server: wyy1.oeooe.cn
     port: 19019
     cipher: chacha20-ietf-poly1305
     password: e97be888-f728-4ef7-baab-7bcd504564ce
   - name: 🇨🇳台湾04家宽
-    输入: ss
+    type: ss
     server: wyy1.oeooe.cn
     port: 30099
     cipher: 2022-blake3-aes-128-gcm
     password: NTJiOTNlOTBiNzBlZjcyOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 🇨🇳台湾家宽05
-    输入: ss
+    type: ss
     server: wyy5.oeooe.cn
     port: 37888
     cipher: 2022-blake3-aes-128-gcm
     password: NTJiOTNlOTBiNzBlZjcyOA==:ZTk3YmU4ODgtZjcyOC00ZQ==
   - name: 🇺🇸美国01纽约GPT
-    输入: ss
+    type: ss
     server: wyy1.oeooe.cn
     port: 45590
     cipher: 2022-blake3-aes-128-gcm
@@ -736,7 +736,7 @@ proxy-groups:
     name: 🚀 节点选择
     proxies:
       - ⚡ 自动选择
-      - 剩余流量：89.24 GB
+      - 剩余流量：89.18 GB
       - 香港2直连
       - 香港3直连
       - 台湾家宽直连
@@ -828,7 +828,7 @@ proxy-groups:
   - name: ⚡ 自动选择
     type: url-test
     proxies:
-      - 剩余流量：89.24 GB
+      - 剩余流量：89.18 GB
       - 香港2直连
       - 香港3直连
       - 台湾家宽直连
@@ -922,100 +922,7 @@ proxy-groups:
     name: 🔍 谷歌服务
     proxies:
       - 🚀 节点选择
-      - 剩余流量：89.24 GB
-      - 香港2直连
-      - 香港3直连
-      - 台湾家宽直连
-      - 美国🇺🇸直连
-      - 新加坡🇸🇬直连
-      - 韩国直连
-      - 美国🇺🇸直连02
-      - 日本🇯🇵直连
-      - 🇭🇰香港01
-      - 🇭🇰香港02解锁流媒体
-      - 🇭🇰香港03
-      - 🇭🇰香港04解锁流媒体
-      - 🇭🇰香港05
-      - 🇭🇰香港06
-      - 🇭🇰香港07
-      - 🇭🇰香港08
-      - 🇭🇰香港09
-      - 🇸🇬新加坡01🔒解锁流媒体
-      - 🇸🇬新加坡02🔒解锁流媒体
-      - 🇸🇬新加坡03🔒解锁流媒体
-      - 🇸🇬新加坡04🔒解锁流媒体
-      - 🇯🇵日本01
-      - 🇯🇵日本02
-      - 🇯🇵日本03
-      - 🇯🇵日本04
-      - 🇯🇵日本05
-      - 🇯🇵日本06
-      - 泰国🇹🇭01
-      - 🇩🇪德国01
-      - 🇩🇪德国02
-      - 🇲🇾马来西亚
-      - 🇨🇦加拿大01
-      - 🇮🇸冰岛
-      - 🇲🇽墨西哥01
-      - 🇵🇱波兰01
-      - 🇨🇭瑞士01
-      - 🇰🇷韩国01
-      - 🇫🇷法国01
-      - 🇧🇪比利时01
-      - 越南🇻🇳01
-      - 越南🇻🇳02
-      - 🇨🇳台湾01
-      - 🇨🇳台湾02
-      - 🇨🇳台湾03
-      - 🇨🇳台湾04家宽
-      - 🇨🇳台湾家宽05
-      - 🇺🇸美国01纽约GPT
-      - 🇺🇸美国02纽约GPT
-      - 🇺🇸美国03纽约GPT
-      - 🇺🇸美国04纽约GPT
-      - 🇺🇸美国05维加斯GPT
-      - 🇬🇧英国01
-      - 🇬🇧英国02
-      - 一元机场.asia
-      - 您正在使用的是最新客户端
-      - 🇭🇰香港 01 | 高级专线
-      - 🇭🇰香港 02 | 高级专线
-      - 🇭🇰香港 03 | 高级专线
-      - 🇭🇰香港 04 | 高级专线
-      - 🇭🇰香港 05 | 高级专线
-      - 🇭🇰香港 06 | 高级专线
-      - 🇭🇰香港 | 25倍计费
-      - 🇯🇵日本 01 | 高级专线
-      - 🇯🇵日本 02 | 高级专线
-      - 🇯🇵日本 03 | 高级专线
-      - 🇯🇵日本 04 | 高级专线
-      - 🇯🇵日本 05 | 高级专线
-      - 🇯🇵日本 06 | 高级专线
-      - 🇯🇵日本 07 | 高级专线
-      - 🇯🇵日本 08 | 高级专线
-      - 🇯🇵日本 01 | 专线
-      - 🇯🇵日本 02 | 专线
-      - 🇯🇵日本 03 | 专线
-      - 🇯🇵日本 04 | 专线
-      - 🇸🇬新加坡 01 | 专线
-      - 🇸🇬新加坡 02 | 专线
-      - 🇸🇬新加坡 03 | 专线
-      - 🇸🇬新加坡 04 | 专线
-      - 🇸🇬新加坡 05 | 专线
-      - 🇸🇬新加坡 06 | 专线
-      - 🇸🇬新加坡 07 | 专线
-      - 🇸🇬新加坡 08 | 专线
-      - 🇺🇸美国 01 | 专线
-      - 🇺🇸美国 02 | 专线
-      - 🇺🇸美国 03 | 专线
-      - 🇺🇸美国 04 | 专线
-      - DIRECT
-      - REJECT
-  - type: select
-    name: 🌐 非中国
-    proxies:
-      - 🚀 节点选择
-      - 剩余流量：89.24 GB
+      - 剩余流量：89.18 GB
       - 香港2直连
       - 香港3直连
       - 台湾家宽直连
@@ -1108,7 +1015,7 @@ proxy-groups:
     name: 🐟 漏网之鱼
     proxies:
       - 🚀 节点选择
-      - 剩余流量：89.24 GB
+      - 剩余流量：89.18 GB
       - 香港2直连
       - 香港3直连
       - 台湾家宽直连
@@ -1199,6 +1106,6 @@ proxy-groups:
       - REJECT
 rules:
   - RULE-SET,google,🔍 谷歌服务
-  - RULE-SET,geolocation-!cn,🌐 非中国
   - RULE-SET,google,🔍 谷歌服务,no-resolve
   - MATCH,🐟 漏网之鱼
+网页翻译知识图片视频音乐社交购物下载
