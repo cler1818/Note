@@ -1820,14 +1820,7 @@ proxy-groups:
       - DIRECT
       - REJECT
 rules:
-  - RULE-SET,youtube,📹 油管视频
-  - RULE-SET,google,🔍 谷歌服务
+
   - RULE-SET,cn,🔒 国内服务
-  - RULE-SET,github,🐱 Github
-  - RULE-SET,gitlab,🐱 Github
-  - RULE-SET,geolocation-!cn,🌐 非中国
-  - RULE-SET,google,🔍 谷歌服务,no-resolve
-  - RULE-SET,private,🏠 私有网络,no-resolve
   - RULE-SET,cn,🔒 国内服务,no-resolve
-  - RULE-SET,telegram,📲 电报消息,no-resolve
-  - MATCH,🐟 漏网之鱼
+
