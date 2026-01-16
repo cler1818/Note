@@ -16,30 +16,6 @@ geox-url:
   asn: >-
     https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
 rule-providers:
-  category-ai-!cn:
-    输入: http
-    format: mrs
-    behavior: domain
-    url: >-
-      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/category-ai-!cn.mrs
-    path: ./ruleset/category-ai-!cn.mrs
-    interval: 86400
-  youtube:
-    输入: http
-    format: mrs
-    behavior: domain
-    url: >-
-      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/youtube.mrs
-    path: ./ruleset/youtube.mrs
-    interval: 86400
-  google:
-    输入: http
-    format: mrs
-    behavior: ipcidr
-    url: >-
-      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/google.mrs
-    path: ./ruleset/google.mrs
-    interval: 86400
   geolocation-cn:
     type: http
     format: mrs
@@ -56,24 +32,8 @@ rule-providers:
       https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/cn.mrs
     path: ./ruleset/cn.mrs
     interval: 86400
-  github:
-    type: http
-    format: mrs
-    behavior: domain
-    url: >-
-      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/github.mrs
-    path: ./ruleset/github.mrs
-    interval: 86400
-  gitlab:
-    输入: http
-    format: mrs
-    behavior: domain
-    url: >-
-      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/gitlab.mrs
-    path: ./ruleset/gitlab.mrs
-    interval: 86400
   geolocation-!cn:
-    输入: http
+    type: http
     format: mrs
     behavior: domain
     url: >-
@@ -81,20 +41,12 @@ rule-providers:
     path: ./ruleset/geolocation-!cn.mrs
     interval: 86400
   private:
-    输入: http
+    type: http
     format: mrs
     behavior: ipcidr
     url: >-
       https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/private.mrs
     path: ./ruleset/private.mrs
-    interval: 86400
-  telegram:
-    输入: http
-    format: mrs
-    behavior: ipcidr
-    url: >-
-      https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/telegram.mrs
-    path: ./ruleset/telegram.mrs
     interval: 86400
 dns:
   enable: true
@@ -115,36 +67,36 @@ dns:
       - https://dns.cloudflare.com/dns-query
       - https://dns.google/dns-query
 proxies:
-  - name: 剩余流量：90.1 GB
-    输入: hysteria2
+  - name: 剩余流量：90.07 GB
+    type: hysteria2
     server: hkzl1.vyunyunnode.top
     port: 49000
     password: e97be888-f728-4ef7-baab-7bcd504564ce
     sni: hkzl1.vyunyunnode.top
     skip-cert-verify: true
   - name: 香港2直连
-    输入: hysteria2
+    type: hysteria2
     server: hkzl2.vyunyunnode.top
     port: 50000
     password: e97be888-f728-4ef7-baab-7bcd504564ce
     sni: hkzl2.vyunyunnode.top
     skip-cert-verify: true
   - name: 香港3直连
-    输入: hysteria2
+    type: hysteria2
     server: hkzl3.vyunyunnode.top
     port: 44001
     password: e97be888-f728-4ef7-baab-7bcd504564ce
     sni: hkzl3.vyunyunnode.top
     skip-cert-verify: true
   - name: 台湾家宽直连
-    输入: hysteria2
+    type: hysteria2
     server: twzl.vyunyunnode.top
     port: 47887
     password: e97be888-f728-4ef7-baab-7bcd504564ce
     sni: twzl.vyunyunnode.top
     skip-cert-verify: true
   - name: 美国🇺🇸直连
-    输入: hysteria2
+    type: hysteria2
     server: uszl2.vyunyunnode.top
     port: 44006
     password: e97be888-f728-4ef7-baab-7bcd504564ce
@@ -756,7 +708,7 @@ proxies:
     tfo: false
     skip-cert-verify: true
   - name: 🇺🇸美国 01 | 专线
-    输入: trojan
+    type: trojan
     server: us1.5d51af20-b66a-7922-0249-cf8779ae28f9.36a8c922.the-best-airport.com
     port: 443
     password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
@@ -766,7 +718,7 @@ proxies:
     tfo: false
     skip-cert-verify: true
   - name: 🇺🇸美国 02 | 专线
-    输入: trojan
+    type: trojan
     server: us2.5d51af20-b66a-7922-0249-cf8779ae28f9.2f6cd430.the-best-airport.com
     port: 443
     password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
@@ -776,7 +728,7 @@ proxies:
     tfo: false
     skip-cert-verify: true
   - name: 🇺🇸美国 03 | 专线
-    输入: trojan
+    type: trojan
     server: us3.5d51af20-b66a-7922-0249-cf8779ae28f9.47253001.the-best-airport.com
     port: 443
     password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
@@ -786,7 +738,7 @@ proxies:
     tfo: false
     skip-cert-verify: true
   - name: 🇺🇸美国 04 | 专线
-    输入: trojan
+    type: trojan
     server: us4.5d51af20-b66a-7922-0249-cf8779ae28f9.30d6a0d0.the-best-airport.com
     port: 443
     password: 4e8e9d60-9198-432a-8bd6-b6770816fe99
@@ -800,99 +752,12 @@ proxy-groups:
     name: 🚀 节点选择
     proxies:
       - ⚡ 自动选择
-      - 剩余流量：90.1 GB
-      - 香港2直连
-      - 香港3直连
-      - 台湾家宽直连
-      - 美国🇺🇸直连
-      - 新加坡🇸🇬直连
-      - 韩国直连
-      - 美国🇺🇸直连02
-      - 日本🇯🇵直连
-      - 🇭🇰香港01
-      - 🇭🇰香港02解锁流媒体
-      - 🇭🇰香港03
-      - 🇭🇰香港04解锁流媒体
-      - 🇭🇰香港05
-      - 🇭🇰香港06
-      - 🇭🇰香港07
-      - 🇭🇰香港08
-      - 🇭🇰香港09
-      - 🇸🇬新加坡01🔒解锁流媒体
-      - 🇸🇬新加坡02🔒解锁流媒体
-      - 🇸🇬新加坡03🔒解锁流媒体
-      - 🇸🇬新加坡04🔒解锁流媒体
-      - 🇯🇵日本01
-      - 🇯🇵日本02
-      - 🇯🇵日本03
-      - 🇯🇵日本04
-      - 🇯🇵日本05
-      - 🇯🇵日本06
-      - 泰国🇹🇭01
-      - 🇩🇪德国01
-      - 🇩🇪德国02
-      - 🇲🇾马来西亚
-      - 🇨🇦加拿大01
-      - 🇮🇸冰岛
-      - 🇲🇽墨西哥01
-      - 🇵🇱波兰01
-      - 🇨🇭瑞士01
-      - 🇰🇷韩国01
-      - 🇫🇷法国01
-      - 🇧🇪比利时01
-      - 越南🇻🇳01
-      - 越南🇻🇳02
-      - 🇨🇳台湾01
-      - 🇨🇳台湾02
-      - 🇨🇳台湾03
-      - 🇨🇳台湾04家宽
-      - 🇨🇳台湾家宽05
-      - 🇺🇸美国01纽约GPT
-      - 🇺🇸美国02纽约GPT
-      - 🇺🇸美国03纽约GPT
-      - 🇺🇸美国04纽约GPT
-      - 🇺🇸美国05维加斯GPT
-      - 🇬🇧英国01
-      - 🇬🇧英国02
-      - 一元机场.asia
-      - 您正在使用的是最新客户端
-      - 🇭🇰香港 01 | 高级专线
-      - 🇭🇰香港 02 | 高级专线
-      - 🇭🇰香港 03 | 高级专线
-      - 🇭🇰香港 04 | 高级专线
-      - 🇭🇰香港 05 | 高级专线
-      - 🇭🇰香港 06 | 高级专线
-      - 🇭🇰香港 | 25倍计费
-      - 🇯🇵日本 01 | 高级专线
-      - 🇯🇵日本 02 | 高级专线
-      - 🇯🇵日本 03 | 高级专线
-      - 🇯🇵日本 04 | 高级专线
-      - 🇯🇵日本 05 | 高级专线
-      - 🇯🇵日本 06 | 高级专线
-      - 🇯🇵日本 07 | 高级专线
-      - 🇯🇵日本 08 | 高级专线
-      - 🇯🇵日本 01 | 专线
-      - 🇯🇵日本 02 | 专线
-      - 🇯🇵日本 03 | 专线
-      - 🇯🇵日本 04 | 专线
-      - 🇸🇬新加坡 01 | 专线
-      - 🇸🇬新加坡 02 | 专线
-      - 🇸🇬新加坡 03 | 专线
-      - 🇸🇬新加坡 04 | 专线
-      - 🇸🇬新加坡 05 | 专线
-      - 🇸🇬新加坡 06 | 专线
-      - 🇸🇬新加坡 07 | 专线
-      - 🇸🇬新加坡 08 | 专线
-      - 🇺🇸美国 01 | 专线
-      - 🇺🇸美国 02 | 专线
-      - 🇺🇸美国 03 | 专线
-      - 🇺🇸美国 04 | 专线
       - DIRECT
       - REJECT
   - name: ⚡ 自动选择
-    输入: url-test
+    type: url-test
     proxies:
-      - 剩余流量：90.1 GB
+      - 剩余流量：90.07 GB
       - 香港2直连
       - 香港3直连
       - 台湾家宽直连
