@@ -17,7 +17,7 @@ geox-url:
     https://github.com/xishang0128/geoip/releases/download/latest/GeoLite2-ASN.mmdb
 rule-providers:
   category-ai-!cn:
-    输入: http
+    type: http
     format: mrs
     behavior: domain
     url: >-
@@ -25,7 +25,7 @@ rule-providers:
     path: ./ruleset/category-ai-!cn.mrs
     interval: 86400
   youtube:
-    输入: http
+    type: http
     format: mrs
     behavior: domain
     url: >-
@@ -33,7 +33,7 @@ rule-providers:
     path: ./ruleset/youtube.mrs
     interval: 86400
   google:
-    输入: http
+    type: http
     format: mrs
     behavior: ipcidr
     url: >-
@@ -1833,3 +1833,4 @@ rules:
   - RULE-SET,cn,🔒 国内服务,no-resolve
   - RULE-SET,telegram,📲 电报消息,no-resolve
   - MATCH,🐟 漏网之鱼
+网页翻译知识图片视频音乐社交购物下载
