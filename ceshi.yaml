@@ -15,7 +15,7 @@ mode: Rule
 port: 7890
 proxies:
     - name: 1_FSCloud剩余流量：86.6 GB
-      type: trojan
+      输入: trojan
       server: 123.dnscloudcloud.top
       port: 443
       password: ac701d8c-acc1-4666-a4de-d7c4cdcc4a4b
@@ -24,7 +24,7 @@ proxies:
         path: /music
       sni: null.us1234567891.xyz
     - name: 2_FSCloud距离下次重置剩余：4 天
-      type: trojan
+      输入: trojan
       server: 123.dnscloudcloud.top
       port: 443
       password: ac701d8c-acc1-4666-a4de-d7c4cdcc4a4b
@@ -33,7 +33,7 @@ proxies:
         path: /music
       sni: null.us1234567891.xyz
     - name: 3_FSCloud套餐到期：2028-12-04
-      type: trojan
+      输入: trojan
       server: 123.dnscloudcloud.top
       port: 443
       password: ac701d8c-acc1-4666-a4de-d7c4cdcc4a4b
