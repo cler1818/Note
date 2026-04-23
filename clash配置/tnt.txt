@@ -1,7 +1,7 @@
 #---------------------------------------------------#
-## 更新：2026-04-18 09:22:32
+## 更新：2026-04-23 09:52:04
 ## 感谢：https://github.com/Hackl0us/SS-Rule-Snippet
-## 链接：https://linkuserssnk.xxyjx.cc/s/oc9632hazm3m-d2229abe?clash=1
+## 链接：https://linkuserssnk.xxyjx.cc/s/oc9632hazm3m-ddb58170?clash=1
 #---------------------------------------------------#
 
 # HTTP 代理端口
@@ -34,52 +34,49 @@ secret: ''
 
 
 proxies:
-  - {"name":"[Lv3·1.5x] 香港01|HKT家宽","type":"trojan","server":"trr1s.tntbooms.com","port":50001,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 香港02|HKT家宽","type":"trojan","server":"trr1k.tntbooms.com","port":50002,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 香港03|HKT家宽","type":"trojan","server":"trr1b.tntbooms.com","port":50007,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"cos.ap-guangzhou.myqcloud.com","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 香港04|HKT家宽","type":"trojan","server":"trr1k.tntbooms.com","port":50003,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 香港05|HKT家宽","type":"trojan","server":"trr1k.tntbooms.com","port":50004,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 香港06|HKT家宽","type":"trojan","server":"trr1b.tntbooms.com","port":50002,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 香港07|BGP商业","type":"trojan","server":"trr1k.tntbooms.com","port":50006,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 香港08|BGP商业","type":"trojan","server":"trr1k.tntbooms.com","port":50005,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本01","type":"trojan","server":"trr1k.tntbooms.com","port":50021,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本02","type":"trojan","server":"trr1k.tntbooms.com","port":50022,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本03","type":"trojan","server":"trr1k.tntbooms.com","port":50023,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本04","type":"trojan","server":"trr1k.tntbooms.com","port":50024,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本05","type":"trojan","server":"trr1k.tntbooms.com","port":50021,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本06","type":"trojan","server":"trr1k.tntbooms.com","port":50022,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本07","type":"trojan","server":"trr1k.tntbooms.com","port":50023,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·1.5x] 日本08","type":"trojan","server":"trr1k.tntbooms.com","port":50024,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 新加坡01","type":"trojan","server":"trr1k.tntbooms.com","port":50011,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 新加坡02","type":"trojan","server":"trr1k.tntbooms.com","port":50012,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 新加坡03","type":"trojan","server":"trr1k.tntbooms.com","port":50013,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 新加坡04","type":"trojan","server":"trr1k.tntbooms.com","port":50011,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 新加坡05","type":"trojan","server":"trr1k.tntbooms.com","port":50012,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 美国LA01","type":"trojan","server":"trr1k.tntbooms.com","port":50032,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 美国LA02","type":"trojan","server":"trr1k.tntbooms.com","port":50033,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 美国LA03","type":"trojan","server":"trr1k.tntbooms.com","port":50034,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 美国LA04","type":"trojan","server":"trr1k.tntbooms.com","port":50033,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv3·2.0x] 美国LA05","type":"trojan","server":"trr1k.tntbooms.com","port":50032,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv2·2.0x] 香港01","type":"trojan","server":"trr1k.tntbooms.com","port":50001,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv2·2.0x] 香港02","type":"trojan","server":"trr1k.tntbooms.com","port":50001,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv2·2.0x] 香港03","type":"trojan","server":"trr1b.tntbooms.com","port":50001,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv2·2.0x] 香港04","type":"trojan","server":"trr1k.tntbooms.com","port":50001,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv2·1.5x] 新加坡02","type":"trojan","server":"trr1k.tntbooms.com","port":50012,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv2·2.0x] 新加坡01","type":"trojan","server":"trr1k.tntbooms.com","port":50012,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv1·2.0x] 新加坡01","type":"trojan","server":"trr1k.tntbooms.com","port":50011,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv1·2.0x] 新加坡02","type":"trojan","server":"trr1k.tntbooms.com","port":50011,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv4·2.0x] 台湾02|Hinet家宽","type":"trojan","server":"trr1k.tntbooms.com","port":50042,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv4·2.0x] 台湾04|Hinet家宽","type":"trojan","server":"trr1k.tntbooms.com","port":50041,"password":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
-  - {"name":"[Lv2·2.0x] 直连01|香港","type":"vmess","server":"dhk1.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
-  - {"name":"[Lv2·2.0x] 直连02|香港","type":"vmess","server":"dhk2.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
-  - {"name":"[Lv3·2.0x] 直连03|香港","type":"vmess","server":"dhk3.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
-  - {"name":"[Lv3·2.0x] 直连04|台湾","type":"vmess","server":"dtw1.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
-  - {"name":"[Lv3·2.0x] 直连05|美国","type":"vmess","server":"dus1.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
-  - {"name":"[Lv3·2.0x] IPV6-01|中转","type":"vmess","server":"v6cn30.tntbooms.com","port":51001,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"10.5.95.5"}},"ws-path":"/ttf","ws-headers":{"Host":"10.5.95.5"}}
-  - {"name":"[Lv3·2.0x] IPV6-02|中转","type":"vmess","server":"v6cn43.tntbooms.com","port":51001,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"10.5.95.5"}},"ws-path":"/ttf","ws-headers":{"Host":"10.5.95.5"}}
-  - {"name":"[Lv3·2.0x] IPV6-05|日本","type":"vmess","server":"v6jp1.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
-  - {"name":"[Lv3·2.0x] IPV6-06|美国","type":"vmess","server":"v6us1.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
-  - {"name":"*官网:超级炸弹.com*其他渠道均为倒卖*","type":"vmess","server":"ddp.tntbooms.com","port":443,"uuid":"5bdb5b33-6c99-38ac-9610-584cdfa8e990","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"[Lv3·1.5x] 香港01|HKT家宽","type":"trojan","server":"tvt2s.tntbooms.com","port":50001,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 香港02|HKT家宽","type":"trojan","server":"tvt2k.tntbooms.com","port":50002,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 香港03|HKT家宽","type":"trojan","server":"tvt2k.tntbooms.com","port":50007,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 香港04|HKT家宽","type":"trojan","server":"tvt2k.tntbooms.com","port":50003,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 香港05|HKT家宽","type":"trojan","server":"tvt2k.tntbooms.com","port":50004,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 香港06|HKT家宽","type":"trojan","server":"tvt2b.tntbooms.com","port":50002,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 香港07|BGP商业","type":"trojan","server":"tvt2k.tntbooms.com","port":50005,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 香港08|BGP商业","type":"trojan","server":"tvt2k.tntbooms.com","port":50006,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本01","type":"trojan","server":"tvt2k.tntbooms.com","port":50021,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本02","type":"trojan","server":"tvt2k.tntbooms.com","port":50022,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本03","type":"trojan","server":"tvt2k.tntbooms.com","port":50023,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本04","type":"trojan","server":"tvt2k.tntbooms.com","port":50024,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本05","type":"trojan","server":"tvt2k.tntbooms.com","port":50021,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本06","type":"trojan","server":"tvt2k.tntbooms.com","port":50022,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本07","type":"trojan","server":"tvt2k.tntbooms.com","port":50023,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·1.5x] 日本08","type":"trojan","server":"tvt2k.tntbooms.com","port":50024,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 新加坡01","type":"trojan","server":"tvt2k.tntbooms.com","port":50011,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 新加坡02","type":"trojan","server":"tvt2k.tntbooms.com","port":50012,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 新加坡03","type":"trojan","server":"tvt2k.tntbooms.com","port":50013,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 新加坡04","type":"trojan","server":"tvt2k.tntbooms.com","port":50011,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 美国LA01","type":"trojan","server":"tvt2k.tntbooms.com","port":50032,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 美国LA02","type":"trojan","server":"tvt2k.tntbooms.com","port":50033,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 美国LA03","type":"trojan","server":"tvt2k.tntbooms.com","port":50034,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 美国LA04","type":"trojan","server":"tvt2k.tntbooms.com","port":50033,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv3·2.0x] 美国LA05","type":"trojan","server":"tvt2k.tntbooms.com","port":50031,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv2·2.0x] 香港01","type":"trojan","server":"tvt2k.tntbooms.com","port":50001,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv2·2.0x] 香港02","type":"trojan","server":"tvt2k.tntbooms.com","port":50001,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mmbiz.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv2·2.0x] 香港03","type":"trojan","server":"tvt2b.tntbooms.com","port":50001,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv2·1.5x] 新加坡02","type":"trojan","server":"tvt2k.tntbooms.com","port":50012,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv2·2.0x] 新加坡01","type":"trojan","server":"tvt2k.tntbooms.com","port":50012,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv1·2.0x] 新加坡01","type":"trojan","server":"tvt2k.tntbooms.com","port":50011,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv1·2.0x] 新加坡02","type":"trojan","server":"tvt2k.tntbooms.com","port":50011,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv4·2.0x] 台湾04|Hinet家宽","type":"trojan","server":"tvt2k.tntbooms.com","port":50041,"password":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","sni":"mpvideo.qpic.cn","skip-cert-verify":true,"udp":true}
+  - {"name":"[Lv2·2.0x] 直连01|香港","type":"vmess","server":"dhk1.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"[Lv2·2.0x] 直连02|香港","type":"vmess","server":"dhk2.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"[Lv3·2.0x] 直连03|香港","type":"vmess","server":"dhk3.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"[Lv3·2.0x] 直连04|台湾","type":"vmess","server":"dtw1.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"[Lv3·2.0x] 直连05|美国","type":"vmess","server":"dus1.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"[Lv3·2.0x] IPV6-01|中转","type":"vmess","server":"v6cn30.tntbooms.com","port":51001,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"10.5.95.5"}},"ws-path":"/ttf","ws-headers":{"Host":"10.5.95.5"}}
+  - {"name":"[Lv3·2.0x] IPV6-02|中转","type":"vmess","server":"v6cn42.tntbooms.com","port":51001,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"10.5.95.5"}},"ws-path":"/ttf","ws-headers":{"Host":"10.5.95.5"}}
+  - {"name":"[Lv3·2.0x] IPV6-05|日本","type":"vmess","server":"v6jp1.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"[Lv3·2.0x] IPV6-06|美国","type":"vmess","server":"v6us1.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
+  - {"name":"*官网:超级炸弹.com*其他渠道均为倒卖*","type":"vmess","server":"ddp.tntbooms.com","port":443,"uuid":"5dac997b-c79e-3a2a-a756-7a60c4b30a9b","alterId":0,"cipher":"auto","udp":true,"network":"ws","ws-opts":{"path":"/ttf","headers":{"Host":"ws-aicdn.com"}},"ws-path":"/ttf","ws-headers":{"Host":"ws-aicdn.com"},"tls":true,"skip-cert-verify":true}
 
 proxy-groups:
 -
@@ -106,7 +103,6 @@ proxy-groups:
     - '[Lv3·2.0x] 新加坡02'
     - '[Lv3·2.0x] 新加坡03'
     - '[Lv3·2.0x] 新加坡04'
-    - '[Lv3·2.0x] 新加坡05'
     - '[Lv3·2.0x] 美国LA01'
     - '[Lv3·2.0x] 美国LA02'
     - '[Lv3·2.0x] 美国LA03'
@@ -115,12 +111,10 @@ proxy-groups:
     - '[Lv2·2.0x] 香港01'
     - '[Lv2·2.0x] 香港02'
     - '[Lv2·2.0x] 香港03'
-    - '[Lv2·2.0x] 香港04'
     - '[Lv2·1.5x] 新加坡02'
     - '[Lv2·2.0x] 新加坡01'
     - '[Lv1·2.0x] 新加坡01'
     - '[Lv1·2.0x] 新加坡02'
-    - '[Lv4·2.0x] 台湾02|Hinet家宽'
     - '[Lv4·2.0x] 台湾04|Hinet家宽'
     - '[Lv2·2.0x] 直连01|香港'
     - '[Lv2·2.0x] 直连02|香港'
