@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Linux.do 随机帖子连续自动翻页
 // @namespace    https://linux.do/
-// @version      3.0.1
+// @version      3.0.2
 // @description  随机打开高回复帖子并连续自动翻页，帖子到底后更换下一篇。
 // @match        https://linux.do/*
 // @grant        none
@@ -195,8 +195,17 @@
 
   function restoreButtonPosition(button) {
     const saved = readButtonPosition();
-    if (!saved) return;
-    placeButton(button, saved.left, saved.top);
+    if (saved) {
+      placeButton(button, saved.left, saved.top);
+      return;
+    }
+
+    // 默认仍显示在右上方，但统一换算成左侧坐标进行固定。
+    placeButton(
+      button,
+      window.innerWidth - button.offsetWidth - 18,
+      18
+    );
   }
 
   function makeButtonDraggable(button) {
@@ -785,20 +794,21 @@
       top: '18px',
       right: '18px',
       zIndex: '2147483647',
-      minWidth: '82px',
-      height: '38px',
-      padding: '0 16px',
+      width: '42px',
+      minWidth: '42px',
+      height: '20px',
+      padding: '0',
       border: '1px solid rgba(255, 255, 255, 0.35)',
-      borderRadius: '9px',
+      borderRadius: '5px',
       backgroundColor: '#2563eb',
       color: '#ffffff',
       fontFamily:
         'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      fontSize: '14px',
+      fontSize: '11px',
       fontWeight: '600',
-      lineHeight: '36px',
+      lineHeight: '18px',
       textAlign: 'center',
-      boxShadow: '0 4px 14px rgba(0, 0, 0, 0.22)',
+      boxShadow: '0 2px 7px rgba(0, 0, 0, 0.22)',
       cursor: 'grab',
       userSelect: 'none',
       touchAction: 'none',
