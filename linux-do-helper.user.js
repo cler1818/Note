@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
-// @version      6.6.0
+// @version      6.7.1
 // @description  两个按钮：日常维护(3分钟)、快速升级(10分钟)。先点赞(白名单·带时间上限)后刷帖(热帖·匀速铺满到正好收尾)。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。按实测规律避开~200次/窗口的24h硬封。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
@@ -322,25 +322,26 @@
             return ["等级3 未同步", s];
         }
         if (raw.locked) return ["等级3 未到2级，暂时看不到进度", "达到2级后 connect 才显示明细"];
-        const m = raw.metrics || {}, c = raw.compliance || {};
+        const m = raw.metrics || {};
         const A = [mSpan("访问", m.visit_days), mSpan("话题", m.topics_viewed), mSpan("帖子", m.posts_viewed), mSpan("回复", m.topics_replied)].filter(Boolean).join(" ");
-        let B = [mSpan("点赞", m.likes_given), mSpan("获赞", m.likes_received), mSpan("获赞天数", m.liked_days), mSpan("获赞用户", m.liked_by_users)].filter(Boolean).join(" ");
-        const viol = [];
-        if (c.reported_posts > 0) viol.push("被举报" + c.reported_posts);
-        if (c.users_reported > 0) viol.push("举报" + c.users_reported);
-        if (c.muted > 0) viol.push("禁言" + c.muted);
-        if (c.banned > 0) viol.push("封禁" + c.banned);
-        const keys = ["visit_days", "topics_viewed", "posts_viewed", "topics_replied", "likes_given", "likes_received", "liked_days", "liked_by_users"];
-        const allMet = keys.every(function (k) { return m[k] && (m[k].c || 0) >= (m[k].r || 0); });
-        if (viol.length) B += ' <span style="color:#ff8a8a;">⚠' + viol.join(" ") + "</span>";
-        else if (allMet) B += ' <span style="color:#8fe0b0;">🎉天数' + fmtNum((m.visit_days || { c: 0 }).c) + "</span>";
+        const B = [mSpan("点赞", m.likes_given), mSpan("获赞", m.likes_received), mSpan("获赞天数", m.liked_days), mSpan("获赞用户", m.liked_by_users)].filter(Boolean).join(" ");
         return [A || "等级3 数据不全，去 connect 刷新", B || "—"];
+    }
+    function complianceTag() {
+        const raw = readTL3();
+        if (!raw || raw.locked || !raw.compliance) return "";
+        const c = raw.compliance, v = [];
+        if (c.reported_posts > 0) v.push("被举报" + c.reported_posts);
+        if (c.users_reported > 0) v.push("举报" + c.users_reported);
+        if (c.muted > 0) v.push("禁言" + c.muted);
+        if (c.banned > 0) v.push("封禁" + c.banned);
+        return v.length ? ' <span style="color:#ff8a8a;">⚠' + v.join(" ") + "</span>" : "";
     }
     function render() {
         const r1 = document.getElementById("ldh_r1"); if (!r1) return;
         const M = MODES[activeMode];
         const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), M.runSeconds * 1000)) : frozenTimer;
-        r1.innerHTML = (me.username || "未登录") + '<span style="float:right;color:#8fe0b0;">' + timer + "</span>";
+        r1.innerHTML = (me.username || "未登录") + complianceTag() + '<span style="float:right;color:#8fe0b0;">' + timer + "</span>";
         const rows = tl3Rows();
         document.getElementById("ldh_r2").innerHTML = rows[0];
         document.getElementById("ldh_r3").innerHTML = rows[1];
@@ -353,16 +354,60 @@
     }
     function markButtons(mode) { ["daily", "fast"].forEach(function (m) { const b = document.getElementById("ldh_" + m); if (!b) return; if (m === mode) { b.textContent = "停止"; b.style.background = "#8a3a3a"; } else { b.disabled = true; b.style.opacity = "0.5"; } }); }
     function restoreButtons() { const a = document.getElementById("ldh_daily"), b = document.getElementById("ldh_fast"); if (a) { a.textContent = "日常维护"; a.disabled = false; a.style.opacity = "1"; a.style.background = "#2f6f3e"; } if (b) { b.textContent = "快速升级"; b.disabled = false; b.style.opacity = "1"; b.style.background = "#33507a"; } }
+    let manualMin = false, composerMin = false;
+    function applyMin() {
+        const body = document.getElementById("ldh_body"), ic = document.getElementById("ldh_min"), p = document.getElementById("ldh_panel");
+        const collapsed = manualMin || composerMin;
+        if (body) body.style.display = collapsed ? "none" : "block";
+        if (ic) ic.textContent = collapsed ? "＋" : "－";
+        if (p) {
+            if (composerMin) { p.style.transform = ""; const r = p.getBoundingClientRect(); const shift = Math.max(0, Math.min(280, window.innerWidth - r.right - 4)); p.style.transform = "translateX(" + shift + "px)"; }
+            else { p.style.transform = ""; }
+        }
+    }
+    function toggleMin() { manualMin = !manualMin; try { sessionStorage.setItem("ldh_min", manualMin ? "1" : "0"); } catch (_) {} applyMin(); }
+    function savePos(p) { try { sessionStorage.setItem("ldh_pos", JSON.stringify({ left: p.style.left, top: p.style.top })); } catch (_) {} }
+    function restorePos(p) { try { const q = JSON.parse(sessionStorage.getItem("ldh_pos") || "null"); if (q && q.left && q.top) { p.style.left = q.left; p.style.top = q.top; p.style.bottom = "auto"; } } catch (_) {} }
+    function enableDrag(p, handle) {
+        let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        handle.addEventListener("mousedown", function (e) {
+            if (e.target.closest("#ldh_sync") || e.target.closest("#ldh_min")) return;
+            const r = p.getBoundingClientRect(); ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY; dragging = true;
+            p.style.left = ox + "px"; p.style.top = oy + "px"; p.style.bottom = "auto"; e.preventDefault();
+        });
+        document.addEventListener("mousemove", function (e) {
+            if (!dragging) return;
+            let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
+            nx = Math.max(0, Math.min(window.innerWidth - 60, nx)); ny = Math.max(0, Math.min(window.innerHeight - 24, ny));
+            p.style.left = nx + "px"; p.style.top = ny + "px";
+        });
+        document.addEventListener("mouseup", function () { if (dragging) { dragging = false; savePos(p); } });
+    }
+    function composerOpen() {
+        const root = document.querySelector("#reply-control");
+        return !!root && root.classList.contains("open") && (root.classList.contains("composer-action-create-topic") || root.classList.contains("composer-action-reply"));
+    }
+    function watchComposer() {
+        function syncC() { const open = composerOpen(); if (open !== composerMin) { composerMin = open; applyMin(); } }
+        let t = null;
+        const mo = new MutationObserver(function () { if (t) return; t = setTimeout(function () { t = null; syncC(); }, 150); });
+        try { mo.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["class"] }); } catch (_) {}
+        syncC();
+    }
     function createUI() {
         if (document.getElementById("ldh_panel")) return;
         const p = document.createElement("div"); p.id = "ldh_panel";
-        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:10px 12px;border-radius:10px;width:330px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4)";
+        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:10px 12px;border-radius:10px;width:280px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4)";
         const rowCss = "white-space:nowrap;overflow:hidden;min-height:15px;";
         p.innerHTML =
-            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+            '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;">' +
             '<span style="font-weight:bold;">⚡ LINUX DO 助手</span>' +
+            '<span>' +
             '<span id="ldh_sync" style="cursor:pointer;font-size:10px;color:#8fe0b0;">⟳同步</span>' +
+            '<span id="ldh_min" style="cursor:pointer;margin-left:10px;font-size:13px;color:#ccc;">－</span>' +
+            '</span>' +
             '</div>' +
+            '<div id="ldh_body">' +
             '<div style="display:flex;gap:8px;margin:8px 0;">' +
             '<button id="ldh_daily" style="flex:1;padding:9px 4px;border:none;border-radius:7px;background:#2f6f3e;color:#fff;cursor:pointer;font-size:13px;">日常维护</button>' +
             '<button id="ldh_fast" style="flex:1;padding:9px 4px;border:none;border-radius:7px;background:#33507a;color:#fff;cursor:pointer;font-size:13px;">快速升级</button>' +
@@ -370,11 +415,17 @@
             '<div id="ldh_r1" style="' + rowCss + '"></div>' +
             '<div id="ldh_r2" style="' + rowCss + 'font-size:10px;"></div>' +
             '<div id="ldh_r3" style="' + rowCss + 'font-size:10px;"></div>' +
-            '<div id="ldh_r4" style="' + rowCss + 'margin-top:2px;"></div>';
+            '<div id="ldh_r4" style="' + rowCss + 'margin-top:2px;"></div>' +
+            '</div>';
         document.body.appendChild(p);
         document.getElementById("ldh_daily").addEventListener("click", function () { startMode("daily"); });
         document.getElementById("ldh_fast").addEventListener("click", function () { startMode("fast"); });
         document.getElementById("ldh_sync").addEventListener("click", function () { sync(); });
+        document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
+        enableDrag(p, document.getElementById("ldh_title"));
+        restorePos(p);
+        manualMin = sessionStorage.getItem("ldh_min") === "1"; applyMin();
+        watchComposer();
         const last = readJson("ld_helper_last", null);
         if (last && last.sent) { sent.topics = last.sent.topics; sent.replies = last.sent.replies; sent.likes = last.sent.likes; finishedOnce = true; frozenTimer = last.frozen || ""; endNote = last.endNote || ""; }
         render();
