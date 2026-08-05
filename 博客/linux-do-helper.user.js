@@ -19,11 +19,11 @@
 
     // ============ 顶部可调配置（含首尾，运行时区间内随机取整数） ============
     // —— 日常维护 ——
-    const DAILY_READ_MIN = [20, 60];      // 目标阅读时间（分钟）：论坛最终记录的时长
+    const DAILY_READ_MIN = [0, 0];      // 目标阅读时间（分钟）：论坛最终记录的时长
     const DAILY_TOPICS   = [20, 30];      // 主题数量
-    const DAILY_REPLIES  = [200, 300];    // 帖子(回复)数量
-    const DAILY_LIKES    = [1, 3];        // 点赞数量
-    const DAILY_RUN_MIN  = 3;             // 墙钟运行时间（分钟）：脚本实际跑多久
+    const DAILY_REPLIES  = [2000, 5000];    // 帖子(回复)数量
+    const DAILY_LIKES    = [1, 2];        // 点赞数量
+    const DAILY_RUN_MIN  = 300;             // 墙钟运行时间（分钟）：脚本实际跑多久
     // —— 快速升级 ——
     const FAST_READ_MIN  = [50, 100];     // 目标阅读时间（分钟）
     const FAST_TOPICS    = [50, 100];     // 主题数量
