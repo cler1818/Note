@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
-// @version      6.7.1
-// @description  两个按钮：日常维护(3分钟)、快速升级(10分钟)。先点赞(白名单·带时间上限)后刷帖(热帖·匀速铺满到正好收尾)。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。按实测规律避开~200次/窗口的24h硬封。
+// @version      6.7.3
+// @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
 // @grant        GM_setValue
@@ -17,9 +17,42 @@
     "use strict";
     if (window.top !== window.self) return;
 
+    /* ============================================================
+     * ⚙ 配置区（全部区间均为闭区间，含首尾两个数值）
+     * ============================================================ */
+    const CFG = {
+        // ---- 日常维护 ----
+        DAILY_MINUTES: 3,              // 运行时间（分钟）
+        DAILY_TOPICS:  [10, 25],       // 主题数量
+        DAILY_REPLIES: [200, 250],     // 帖子数量
+        DAILY_LIKES:   [1, 3],         // 点赞数量
+
+        // ---- 快速升级 ----
+        FAST_MINUTES:  10,             // 运行时间（分钟）
+        FAST_TOPICS:   [50, 100],      // 主题数量
+        FAST_REPLIES:  [2000, 3000],   // 帖子数量
+        FAST_LIKES:    [3, 5],         // 点赞数量
+
+        // ---- 日常挂机 ----
+        IDLE_MINUTES:  500,            // 运行时间（分钟）
+        IDLE_TOPICS:   [200, 500],     // 主题数量
+        IDLE_REPLIES:  [2000, 5000],   // 帖子数量
+        IDLE_LIKES:    [0, 0],         // 点赞数量
+
+        // ---- 全局：每次向服务器上传阅读进度(timings)的间隔（秒）----
+        // 每一次上传的间隔都在这个区间内【均匀真随机】抽取，所以第1次可能隔 8 秒、
+        // 第2次隔 47 秒、第3次隔 21 秒，每次都不同，不会出现"每次都无限接近上限"的雷同模式。
+        // 注意：间隔必须 >0 且 <100 秒才会被 Discourse 计入总阅读时间，上限别写太大。
+        // 实际上限会自动收窄：若"剩余主题数"要求发更多次请求，脚本会压低上限保证跑完计划量；
+        // 帖子数不够时每次只传 1 楼，也绝不提前收工，全程铺满到最后一秒。
+        REQ_GAP_SEC:   [0, 60]
+    };
+    /* ==================== 配置区结束 ==================== */
+
     // ============ 共享工具 ============
     function randInt(a, b) { return Math.floor(a + Math.random() * (b - a + 1)); }
     function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
     function mmss(ms) { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
     function fmtNum(n) { n = Number(n) || 0; return n >= 10000 ? (n / 10000).toFixed(1).replace(/\.0$/, "") + "万" : String(n); }
     function stripAt(s) { return String(s || "").replace(/^@/, "").trim(); }
@@ -97,7 +130,8 @@
     // ======================= linux.do 分支 =======================
     const COMMON = {
         MSECS_MIN: 800, MSECS_MAX: 1400,
-        MIN_INTERVAL: 900, MAX_SPREAD_INTERVAL: 20000,
+        FLOOR_INTERVAL: 800,                 // 物理最小间隔，防止把服务器打爆（CFG.REQ_GAP_SEC[0]=0 时生效）
+        MAX_BATCH: 60,                       // 单次 timings 最多带多少楼
         ENTER_MIN: 700, ENTER_MAX: 1200,
         HARD_BLOCK_RETRY_THRESHOLD: 600, CF_BACKOFF_MS: 10000, MAX_CONSEC_CF: 5,
         LIKE_REACTION: "heart",
@@ -107,10 +141,16 @@
         WARN_REQ: 130, REFUSE_START: 165, HARD_STOP: 185, SAFE_RESUME: 120,
         TL3_SYNC_INTERVAL_MS: 30 * 60 * 1000
     };
+    const GAP_MIN_MS = Math.max(COMMON.FLOOR_INTERVAL, Math.round(CFG.REQ_GAP_SEC[0] * 1000));
+    const GAP_MAX_MS = Math.max(GAP_MIN_MS + 1000, Math.round(CFG.REQ_GAP_SEC[1] * 1000));
+
     const MODES = {
-        daily: { name: "日常维护", runSeconds: 180, topics: [10, 20], replies: [500, 1000], likes: [2, 4], batch: [10, 16], perTopic: [15, 90], safety: 160, likeCapMs: 60000 },
-        fast: { name: "快速升级", runSeconds: 600, topics: [20, 50], replies: [2000, 3000], likes: [2, 10], batch: [22, 38], perTopic: [40, 160], safety: 175, likeCapMs: 120000 }
+        daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 20, safety: 160,      noLimit: false },
+        fast:  { key: "fast",  name: "快速升级", color: "#33507a", minutes: CFG.FAST_MINUTES,  topics: CFG.FAST_TOPICS,  replies: CFG.FAST_REPLIES,  likes: CFG.FAST_LIKES,  minPosts: 20, safety: 175,      noLimit: false },
+        idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a", minutes: CFG.IDLE_MINUTES,  topics: CFG.IDLE_TOPICS,  replies: CFG.IDLE_REPLIES,  likes: CFG.IDLE_LIKES,  minPosts: 8,  safety: Infinity, noLimit: true,  fullRandom: true  }
     };
+    const MODE_KEYS = ["daily", "fast", "idle"];
+    function totalMs(M) { return M.minutes * 60 * 1000; }
 
     let running = false, abort = false, activeMode = "", startedAt = 0, csrf = "", consecCf = 0, uiTimer = null;
     let finishedOnce = false, frozenTimer = "", banMsg = "", endNote = "";
@@ -168,24 +208,71 @@
         syncViaXhr(function () { openConnectTab(false); });
     }
 
-    // (openConnectSync 已并入 sync() / openConnectTab)
-
+    // ---- 频率窗口 ----
     function logTimingReq() { const a = readJson(COMMON.REQLOG_KEY, []).filter(function (t) { return Date.now() - t < COMMON.WINDOW_MS; }); a.push(Date.now()); writeJson(COMMON.REQLOG_KEY, a); }
     function recentTimingCount() { return readJson(COMMON.REQLOG_KEY, []).filter(function (t) { return Date.now() - t < COMMON.WINDOW_MS; }).length; }
-    function budgetHit() { return recentTimingCount() >= COMMON.HARD_STOP || sent.timingReq >= MODES[activeMode].safety; }
+    function budgetHit() {
+        const M = MODES[activeMode];
+        if (!M || M.noLimit) return false;                 // 日常挂机：不做频率检查
+        return recentTimingCount() >= COMMON.HARD_STOP || sent.timingReq >= M.safety;
+    }
     function minutesUntilBelow(target) {
         const now = Date.now(); const arr = readJson(COMMON.REQLOG_KEY, []).filter(function (t) { return now - t < COMMON.WINDOW_MS; }).sort(function (a, b) { return a - b; });
         if (arr.length <= target) return 0;
         return Math.max(1, Math.ceil((arr[arr.length - target - 1] + COMMON.WINDOW_MS - now) / 60000));
     }
-    function dynamicReadInterval() {
-        const M = MODES[activeMode];
+
+    /* ---- 核心调度：间隔真随机 + 全程铺满 ----
+     * cap     = 本次可用的间隔上限。取 min(GAP_MAX, 2 × 剩余时间 ÷ 最少请求数)。
+     *           乘 2 是因为 [0,cap] 均匀分布的期望是 cap/2，这样平均下来正好铺满剩余时间。
+     *           「最少请求数」= max(剩余主题数, 剩余时间÷GAP_MAX)，保证计划的主题数能跑完。
+     * interval= 在 [GAP_MIN, cap] 内【均匀真随机】抽取 —— 每次都不同，不会雷同贴着上限。
+     * batch   = 剩余帖子数 ÷ 预估剩余请求数，最低 1 楼（帖子不够就每次只传 1 楼，不硬凑大包）。
+     * 因为每次都用「当前剩余时间/剩余量」重算，跑快跑慢都会自动纠偏，
+     * 一定铺满到最后一秒，不会提前跑完再空转。
+     */
+    function schedule(T) {
+        const M = MODES[activeMode];                           // 从全局取，engine 里的 M 在此不可见
+        const remTime = Math.max(0, T - elapsed());
         const remReplies = Math.max(0, plan.replies - sent.replies);
-        const remReq = Math.max(1, Math.ceil(remReplies / ((M.batch[0] + M.batch[1]) / 2)));
-        const remTime = Math.max(0, M.runSeconds * 1000 - elapsed());
-        let iv = remTime / remReq;
-        iv = Math.max(COMMON.MIN_INTERVAL, Math.min(COMMON.MAX_SPREAD_INTERVAL, iv));
-        return Math.round(iv * (0.8 + Math.random() * 0.4));
+        const remTopics = Math.max(0, plan.topics - sent.topics);
+        // 至少要发这么多次：既要满足"间隔不超过 GAP_MAX"，也要够把剩下的主题跑完
+        let minReq = Math.max(Math.ceil(remTime / GAP_MAX_MS), remTopics, 1);
+        // 短模式：剩余请求数不得超过 safety 余额，否则间隔会被压得越来越短直到撞上限
+        if (M && !M.fullRandom) {
+            const left = Math.max(1, M.safety - 5 - sent.timingReq);
+            minReq = Math.max(1, Math.min(minReq, left));
+        }
+        const avg = remTime / minReq;                          // 铺满剩余时间所需的平均间隔
+        let interval, cap, estReq, batchOverride = null;
+        if (M && M.fullRandom) {
+            // 日常挂机：时间充裕，间隔在 [下限, cap] 内均匀真随机。
+            // 均匀分布期望为 cap/2，故 cap 取 2×avg，平均下来正好铺满。
+            cap = clamp(Math.round(avg * 2), GAP_MIN_MS + 200, GAP_MAX_MS);
+            interval = randInt(GAP_MIN_MS, cap);
+            estReq = Math.max(1, Math.round(remTime / Math.max(1, cap / 2)));
+        } else {
+            // 日常维护/快速升级：跟原脚本一致，只保证「单轮请求总数 ≤ safety」，
+            // 不看每小时频率（跨次运行由 1 小时窗口的 165/185 负责）。
+            // 由 safety 倒推每次至少带多少楼：
+            //   总请求 ≈ 主题数 + 帖子数/batch ≤ safety  →  batch ≥ 帖子数/(safety-主题数)
+            const room = Math.max(1, M.safety - plan.topics - 5);   // 留 5 次余量
+            const minBatch = Math.max(1, Math.ceil(plan.replies / room));
+            // 按剩余量算需要的 batch，再用 minBatch 兜底，避免超发帖子/撞 safety
+            const need = remReplies > 0 ? Math.ceil(remReplies / Math.max(1, room - sent.timingReq)) : 1;
+            batchOverride = randInt(Math.max(minBatch, need), Math.min(Math.max(minBatch, need) + 8, COMMON.MAX_BATCH));
+            if (remReplies > 0) batchOverride = Math.min(batchOverride, remReplies);
+            else batchOverride = 1;                              // 帖子配额已满：只发心跳，别再超发
+            const lo = Math.max(GAP_MIN_MS, Math.round(avg * 0.4));
+            const hi = Math.max(lo + 500, Math.min(GAP_MAX_MS, Math.round(avg * 1.6)));
+            interval = randInt(lo, hi);                              // 间隔仍每次随机
+            cap = hi;
+            estReq = minReq;
+        }
+        let batch = batchOverride !== null ? batchOverride
+                  : (remReplies > 0 ? Math.round(remReplies / estReq) : 1);
+        batch = clamp(batch, 1, COMMON.MAX_BATCH);            // 帖子不够就每次只传 1 楼
+        return { batch: batch, interval: interval, remReq: estReq, remTime: remTime, cap: cap };
     }
 
     // ---- API ----
@@ -228,76 +315,174 @@
         items.forEach(function (it) { if (!it || it.deleted || it.hidden || !it.topic_id || !it.post_id) return; if (!it.username || String(it.username).toLowerCase() !== u.toLowerCase()) return; const k = it.topic_id + ":" + it.post_id; if (seen.has(k)) return; seen.add(k); out.push({ topicId: String(it.topic_id), postId: String(it.post_id) }); });
         return shuffle(out);
     }
-    async function pickTopics(need) {
-        async function list(url) { try { const r = await fetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); return ((await r.json()).topic_list || {}).topics || []; } catch (_) { return []; } }
-        let raw = []; const src = ["/top.json?per_page=50", "/top.json?per_page=50&page=1", "/latest.json?order=posts", "/latest.json?order=posts&page=1"];
-        for (let i = 0; i < src.length && raw.length < need + 15; i++) raw = raw.concat(await list(src[i]));
-        const out = [], seen = new Set();
-        raw.forEach(function (t) { const id = t && t.id ? String(t.id) : ""; if (!id || seen.has(id)) return; const h = Number(t.highest_post_number || t.posts_count || 0); if (h >= 20 && Number(t.last_read_post_number || 0) < h) { seen.add(id); out.push(id); } });
-        return shuffle(out);
+
+    /* ---- 主题池：按需分页拉取，够挂机模式取几百个主题 ---- */
+    const TOPIC_SOURCES = [
+        "/top.json?period=all", "/top.json?period=yearly", "/top.json?period=quarterly",
+        "/top.json?period=monthly", "/latest.json?order=posts", "/latest.json"
+    ];
+    const pool = {
+        queue: [], seen: new Set(), src: 0, page: 0, exhausted: false,
+        reset: function () { this.queue = []; this.seen = new Set(); this.src = 0; this.page = 0; this.exhausted = false; }
+    };
+    async function listTopics(url) {
+        try { const r = await fetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); return ((await r.json()).topic_list || {}).topics || []; } catch (_) { return []; }
+    }
+    async function refillPool(minPosts) {
+        let rounds = 0;
+        while (pool.queue.length < 40 && rounds < 12 && !pool.exhausted && !abort) {
+            rounds++;
+            const base = TOPIC_SOURCES[pool.src];
+            const url = base + (base.indexOf("?") >= 0 ? "&" : "?") + "per_page=50&page=" + pool.page;
+            const raw = await listTopics(url);
+            // 翻到下一源 / 下一页
+            if (!raw.length) {
+                pool.src++;
+                if (pool.src >= TOPIC_SOURCES.length) { pool.src = 0; pool.page++; if (pool.page > 20) { pool.exhausted = true; } }
+            } else {
+                pool.src++;
+                if (pool.src >= TOPIC_SOURCES.length) { pool.src = 0; pool.page++; }
+            }
+            const fresh = [];
+            raw.forEach(function (t) {
+                const id = t && t.id ? String(t.id) : "";
+                if (!id || pool.seen.has(id)) return;
+                const h = Number(t.highest_post_number || t.posts_count || 0);
+                if (h >= minPosts && Number(t.last_read_post_number || 0) < h) { pool.seen.add(id); fresh.push(id); }
+            });
+            pool.queue = pool.queue.concat(shuffle(fresh));
+            await sleep(randInt(200, 500));
+        }
+        return pool.queue.length > 0;
+    }
+    async function nextTopic(minPosts) {
+        if (!pool.queue.length) { const ok = await refillPool(minPosts); if (!ok) return ""; }
+        return pool.queue.shift() || "";
     }
 
-    // ---- 引擎：先点赞 → 再刷帖铺满 ----
+    /* ---- 点赞：预先随机分配到整个运行时长上的时间点，到点插入 ---- */
+    let likeSlots = [], likeNames = [], likeNameIdx = 0, likeCands = [], likeDead = false;
+    function buildLikeSlots(T, n) {
+        const a = [];
+        for (let i = 0; i < n; i++) a.push(randInt(Math.round(T * 0.02), Math.round(T * 0.95)));
+        a.sort(function (x, y) { return x - y; });
+        return a;
+    }
+    async function doOneLike() {
+        for (let guard = 0; guard < 10 && !abort && !likeDead; guard++) {
+            if (!likeCands.length) {
+                if (likeNameIdx >= likeNames.length) { likeDead = true; return false; }
+                likeCands = await fetchUserPosts(likeNames[likeNameIdx++]);
+                await sleep(randInt(400, 800));
+                continue;
+            }
+            const c = likeCands.shift();
+            if (handledLikeTopics.has(c.topicId)) continue;
+            if (await getReacted(c.postId)) { handledLikeTopics.add(c.topicId); await sleep(250); continue; }
+            const code = await likeToggle(c.postId);
+            await sleep(randInt(600, 1100));
+            if (code >= 200 && code < 300) { sent.likes++; handledLikeTopics.add(c.topicId); render(); return true; }
+            if (code === 429) { likeDead = true; likeSlots = []; endNote = "点赞被限流"; return false; }
+        }
+        return false;
+    }
+    async function maybeLike() {
+        while (likeSlots.length && !likeDead && !abort && elapsed() >= likeSlots[0]) {
+            likeSlots.shift();
+            await doOneLike();
+        }
+    }
+
+    // ---- 引擎：点赞与刷帖交错，匀速铺满整个运行时长 ----
     async function engine(mode) {
         const M = MODES[mode];
+        const T = totalMs(M);
         me = await getUser(); if (!me.username) return finish("未登录", "未登录");
         csrf = await getCsrf(); if (!csrf) return finish("无CSRF", "无CSRF");
+
         plan.topics = randInt(M.topics[0], M.topics[1]);
         plan.replies = randInt(M.replies[0], M.replies[1]);
         plan.likes = randInt(M.likes[0], M.likes[1]);
+        render();
 
-        await doLikes(plan.likes, Date.now() + M.likeCapMs);           // 阶段1 先点赞
+        // 点赞排期
+        likeSlots = []; likeNames = []; likeNameIdx = 0; likeCands = []; likeDead = false;
+        if (plan.likes > 0) {
+            likeSlots = buildLikeSlots(T, plan.likes);
+            likeNames = shuffle((await loadNames()).filter(function (n) { return n && n.toLowerCase() !== me.username.toLowerCase(); }));
+            if (!likeNames.length) likeDead = true;
+        }
 
-        const topicIds = await pickTopics(plan.topics + 15);           // 阶段2 刷帖铺满
-        for (let i = 0; i < topicIds.length; i++) {
-            if (abort || elapsed() >= M.runSeconds * 1000) break;
-            if (sent.topics >= plan.topics && sent.replies >= plan.replies) break;
+        pool.reset();
+
+        // 主循环：一直跑到时间到，中途不空转
+        while (!abort && elapsed() < T) {
             if (budgetHit()) { endNote = "本窗口达上限"; break; }
-            const meta = await enterTopic(topicIds[i]);
+            await maybeLike();
+            if (abort || elapsed() >= T) break;
+
+            const tid = await nextTopic(M.minPosts);
+            if (!tid) {
+                // 主题池暂时枯竭：等一个调度间隔再试，不提前收工
+                const s = schedule(T);
+                await sleep(Math.min(s.interval, 5000));
+                if (pool.exhausted) { pool.reset(); }
+                continue;
+            }
+
+            const meta = await enterTopic(tid);
             await sleep(randInt(COMMON.ENTER_MIN, COMMON.ENTER_MAX));
             if (!meta.ok || meta.highest < 2) continue;
-            const remTopics = Math.max(1, plan.topics - sent.topics), remReplies = Math.max(0, plan.replies - sent.replies);
-            let want = sent.topics >= plan.topics ? remReplies : Math.round((remReplies / remTopics) * (0.6 + Math.random() * 0.8));
-            want = Math.max(M.perTopic[0], Math.min(M.perTopic[1], want || M.perTopic[0]));
-            const start = Math.max(2, meta.lastRead + 1), end = Math.min(meta.highest, start + want - 1);
+
+            // 本主题打算读多少楼：按「剩余帖子 ÷ 剩余主题」摊，并保证够切成整数个 batch
+            const s0 = schedule(T);
+            const remTopics = Math.max(1, plan.topics - sent.topics);
+            const remReplies = Math.max(0, plan.replies - sent.replies);
+            let want = remReplies > 0 ? Math.round((remReplies / remTopics) * (0.7 + Math.random() * 0.6)) : s0.batch;
+            want = clamp(want, s0.batch, s0.batch * 8);
+
+            const start = Math.max(2, meta.lastRead + 1);
+            const end = Math.min(meta.highest, start + want - 1);
             if (end < start) continue;
             const nums = []; for (let n = start; n <= end; n++) nums.push(n);
+
             let readThis = false, p = 0;
-            while (p < nums.length) {
-                if (abort || elapsed() >= M.runSeconds * 1000) break;
-                if (sent.topics >= plan.topics && sent.replies >= plan.replies) break;
+            while (p < nums.length && !abort && elapsed() < T) {
                 if (budgetHit()) { endNote = "本窗口达上限"; break; }
-                const batch = nums.slice(p, p + randInt(M.batch[0], M.batch[1]));
+                await maybeLike();
+                if (abort || elapsed() >= T) break;
+
+                const s = schedule(T);
+                const batch = nums.slice(p, p + s.batch);
+                if (!batch.length) break;
                 sent.timingReq++;
-                const res = await postTimings(topicIds[i], batch);
-                if (res.kind === "ok") { consecCf = 0; logTimingReq(); sent.replies += batch.length; if (!readThis) { sent.topics++; readThis = true; } render(); p += batch.length; await sleep(dynamicReadInterval()); }
-                else if (res.kind === "discourse_hard") { return finish("24h封禁", "该号24h封禁中"); }
-                else if (res.kind === "cloudflare") { consecCf++; if (consecCf >= COMMON.MAX_CONSEC_CF) break; await sleep(COMMON.CF_BACKOFF_MS); }
-                else if (res.kind === "discourse_soft") { await sleep(8000); }
-                else { await sleep(1500); }
+                const res = await postTimings(tid, batch);
+                if (res.kind === "ok") {
+                    consecCf = 0; logTimingReq();
+                    sent.replies += batch.length;
+                    if (!readThis) { sent.topics++; readThis = true; }
+                    render();
+                    p += batch.length;
+                    await sleep(s.interval);
+                } else if (res.kind === "discourse_hard") {
+                    return finish("24h封禁", "该号24h封禁中");
+                } else if (res.kind === "cloudflare") {
+                    consecCf++; if (consecCf >= COMMON.MAX_CONSEC_CF) break;
+                    await sleep(COMMON.CF_BACKOFF_MS);
+                } else if (res.kind === "discourse_soft") {
+                    await sleep(8000);
+                } else {
+                    await sleep(1500);
+                }
             }
         }
-        while (!abort && elapsed() < M.runSeconds * 1000) await sleep(300);  // 空转到刚好收尾
+        // 收尾：把剩余没到点的点赞补掉（正常情况下 likeSlots 已排到 95% 处，这里几乎不会触发）
+        while (likeSlots.length && !likeDead && !abort) { likeSlots.shift(); await doOneLike(); }
         finish("done");
-    }
-    async function doLikes(target, deadline) {
-        let names = shuffle((await loadNames()).filter(function (n) { return n && n.toLowerCase() !== me.username.toLowerCase(); }));
-        for (let i = 0; i < names.length && sent.likes < target; i++) {
-            if (abort || Date.now() >= deadline) break;
-            const cands = await fetchUserPosts(names[i]); await sleep(randInt(500, 900));
-            for (let j = 0; j < cands.length && sent.likes < target; j++) {
-                if (abort || Date.now() >= deadline) break;
-                const c = cands[j]; if (handledLikeTopics.has(c.topicId)) continue;
-                if (await getReacted(c.postId)) { handledLikeTopics.add(c.topicId); await sleep(300); continue; }
-                const code = await likeToggle(c.postId); await sleep(randInt(700, 1200));
-                if (code >= 200 && code < 300) { sent.likes++; handledLikeTopics.add(c.topicId); render(); break; }
-                if (code === 429) return;
-            }
-        }
     }
 
     function finish(reason, note) {
-        const M = MODES[activeMode]; const used = M ? Math.min(elapsed(), M.runSeconds * 1000) : elapsed();
+        const M = MODES[activeMode]; const used = M ? Math.min(elapsed(), totalMs(M)) : elapsed();
         running = false; finishedOnce = true; if (uiTimer) { clearInterval(uiTimer); uiTimer = null; }
         frozenTimer = "⏱ " + mmss(used); if (note) endNote = note; activeMode = "";
         writeJson("ld_helper_last", { at: Date.now(), sent: { topics: sent.topics, replies: sent.replies, likes: sent.likes }, frozen: frozenTimer, endNote: endNote });
@@ -305,10 +490,14 @@
     }
     function startMode(mode) {
         if (running) { if (mode === activeMode) abort = true; return; }
-        const rc = recentTimingCount();
-        if (rc >= COMMON.REFUSE_START) { banMsg = "⛔ 本窗口已发" + rc + "次，约" + minutesUntilBelow(COMMON.SAFE_RESUME) + "分钟后再来"; finishedOnce = false; render(); return; }
+        const M = MODES[mode];
+        if (!M.noLimit) {                                   // 日常挂机跳过启动前的频率检查
+            const rc = recentTimingCount();
+            if (rc >= COMMON.REFUSE_START) { banMsg = "⛔ 本窗口已发" + rc + "次，约" + minutesUntilBelow(COMMON.SAFE_RESUME) + "分钟后再来"; finishedOnce = false; render(); return; }
+        }
         banMsg = ""; endNote = ""; frozenTimer = ""; running = true; abort = false; activeMode = mode; startedAt = Date.now(); consecCf = 0;
         sent.topics = 0; sent.replies = 0; sent.likes = 0; sent.timingReq = 0; handledLikeTopics.clear();
+        plan.topics = 0; plan.replies = 0; plan.likes = 0;
         markButtons(mode); if (uiTimer) clearInterval(uiTimer); uiTimer = setInterval(render, 1000); render();
         engine(mode).catch(function (e) { finish("异常", "异常:" + (e && e.message || e)); });
     }
@@ -340,20 +529,36 @@
     function render() {
         const r1 = document.getElementById("ldh_r1"); if (!r1) return;
         const M = MODES[activeMode];
-        const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), M.runSeconds * 1000)) : frozenTimer;
+        const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), totalMs(M))) : frozenTimer;
         r1.innerHTML = (me.username || "未登录") + complianceTag() + '<span style="float:right;color:#8fe0b0;">' + timer + "</span>";
         const rows = tl3Rows();
         document.getElementById("ldh_r2").innerHTML = rows[0];
         document.getElementById("ldh_r3").innerHTML = rows[1];
         const r4 = document.getElementById("ldh_r4");
-        const word = running ? "正在运行" : (finishedOnce ? "脚本结束" : "准备就绪");
+        const word = running ? (M ? M.name + "中" : "正在运行") : (finishedOnce ? "脚本结束" : "准备就绪");
         if (banMsg && !running && !finishedOnce) r4.innerHTML = '<span style="color:#ff8a8a;">' + banMsg + "</span>";
-        else r4.innerHTML = word + "：主题 " + sent.topics + " 丨 回复 " + sent.replies + " 丨 点赞 " + sent.likes + (endNote ? ' <span style="color:#ff8a8a;">·' + endNote + "</span>" : "");
+        else {
+            const goal = running && plan.topics ? '<span style="color:#888;">/' + plan.topics + "</span>" : "";
+            const goalR = running && plan.replies ? '<span style="color:#888;">/' + plan.replies + "</span>" : "";
+            const goalL = running && plan.likes ? '<span style="color:#888;">/' + plan.likes + "</span>" : "";
+            r4.innerHTML = word + "：主题 " + sent.topics + goal + " 丨 回复 " + sent.replies + goalR + " 丨 点赞 " + sent.likes + goalL + (endNote ? ' <span style="color:#ff8a8a;">·' + endNote + "</span>" : "");
+        }
         const sy = document.getElementById("ldh_sync");
         if (sy) { const failed = (syncState === "cf" || syncState === "err" || syncState === "empty" || syncState === "login" || syncState === "nogrant" || syncState === "otheruser" || syncState === "popupblock"); const hasData = !!readTL3(); sy.textContent = (syncState === "syncing" || syncState === "opening") ? "同步中…" : (failed && !hasData) ? "⟳重试" : (syncState === "ok" || hasData) ? "✓已同步" : "⟳同步"; sy.style.color = (failed && !hasData) ? "#ff8a8a" : "#8fe0b0"; }
     }
-    function markButtons(mode) { ["daily", "fast"].forEach(function (m) { const b = document.getElementById("ldh_" + m); if (!b) return; if (m === mode) { b.textContent = "停止"; b.style.background = "#8a3a3a"; } else { b.disabled = true; b.style.opacity = "0.5"; } }); }
-    function restoreButtons() { const a = document.getElementById("ldh_daily"), b = document.getElementById("ldh_fast"); if (a) { a.textContent = "日常维护"; a.disabled = false; a.style.opacity = "1"; a.style.background = "#2f6f3e"; } if (b) { b.textContent = "快速升级"; b.disabled = false; b.style.opacity = "1"; b.style.background = "#33507a"; } }
+    function markButtons(mode) {
+        MODE_KEYS.forEach(function (m) {
+            const b = document.getElementById("ldh_" + m); if (!b) return;
+            if (m === mode) { b.textContent = "停止"; b.style.background = "#8a3a3a"; b.disabled = false; b.style.opacity = "1"; }
+            else { b.disabled = true; b.style.opacity = "0.5"; }
+        });
+    }
+    function restoreButtons() {
+        MODE_KEYS.forEach(function (m) {
+            const b = document.getElementById("ldh_" + m); if (!b) return;
+            b.textContent = MODES[m].name; b.disabled = false; b.style.opacity = "1"; b.style.background = MODES[m].color;
+        });
+    }
     let manualMin = false, composerMin = false;
     function applyMin() {
         const body = document.getElementById("ldh_body"), ic = document.getElementById("ldh_min"), p = document.getElementById("ldh_panel");
@@ -399,6 +604,7 @@
         const p = document.createElement("div"); p.id = "ldh_panel";
         p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:10px 12px;border-radius:10px;width:280px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4)";
         const rowCss = "white-space:nowrap;overflow:hidden;min-height:15px;";
+        const btnCss = "flex:1;padding:9px 2px;border:none;border-radius:7px;color:#fff;cursor:pointer;font-size:12px;white-space:nowrap;";
         p.innerHTML =
             '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;">' +
             '<span style="font-weight:bold;">⚡ LINUX DO 助手</span>' +
@@ -408,9 +614,10 @@
             '</span>' +
             '</div>' +
             '<div id="ldh_body">' +
-            '<div style="display:flex;gap:8px;margin:8px 0;">' +
-            '<button id="ldh_daily" style="flex:1;padding:9px 4px;border:none;border-radius:7px;background:#2f6f3e;color:#fff;cursor:pointer;font-size:13px;">日常维护</button>' +
-            '<button id="ldh_fast" style="flex:1;padding:9px 4px;border:none;border-radius:7px;background:#33507a;color:#fff;cursor:pointer;font-size:13px;">快速升级</button>' +
+            '<div style="display:flex;gap:6px;margin:8px 0;">' +
+            '<button id="ldh_daily" style="' + btnCss + 'background:' + MODES.daily.color + ';">日常维护</button>' +
+            '<button id="ldh_fast"  style="' + btnCss + 'background:' + MODES.fast.color + ';">快速升级</button>' +
+            '<button id="ldh_idle"  style="' + btnCss + 'background:' + MODES.idle.color + ';">日常挂机</button>' +
             '</div>' +
             '<div id="ldh_r1" style="' + rowCss + '"></div>' +
             '<div id="ldh_r2" style="' + rowCss + 'font-size:10px;"></div>' +
@@ -418,8 +625,7 @@
             '<div id="ldh_r4" style="' + rowCss + 'margin-top:2px;"></div>' +
             '</div>';
         document.body.appendChild(p);
-        document.getElementById("ldh_daily").addEventListener("click", function () { startMode("daily"); });
-        document.getElementById("ldh_fast").addEventListener("click", function () { startMode("fast"); });
+        MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
         document.getElementById("ldh_sync").addEventListener("click", function () { sync(); });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
         enableDrag(p, document.getElementById("ldh_title"));
@@ -429,6 +635,8 @@
         const last = readJson("ld_helper_last", null);
         if (last && last.sent) { sent.topics = last.sent.topics; sent.replies = last.sent.replies; sent.likes = last.sent.likes; finishedOnce = true; frozenTimer = last.frozen || ""; endNote = last.endNote || ""; }
         render();
+        // 运行中误关页面时提醒一下（尤其是 500 分钟的日常挂机）
+        window.addEventListener("beforeunload", function (e) { if (running) { e.preventDefault(); e.returnValue = ""; return ""; } });
         getUser().then(function (u) {
             me = u; render();
             if (me.username && !sessionStorage.getItem("ldh_autosync")) {
