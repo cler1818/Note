@@ -113,6 +113,7 @@
         CLIENT_ID: "KZUecGfhhDZMVnv8UtEdhOhf9sNOhqVX",
         FLOW: "ar_tab_flow",          // 跨页面状态机（兜底流程用）
         DAYKEY: "ar_last_ok_day",     // 当天签到成功的日期戳（本地日期字符串）
+        NOTEKEY: "ar_checkin_note",   // 当天签到状态（按日期存储，包含state和note）
         AUTOKEY: "ar_auto_login_ts"   // 主动访问自动登录的节流时间戳
     };
     const ANY = {
@@ -132,6 +133,22 @@
     function gmGet(k, fb) { try { return GM_getValue(k, fb); } catch (_) { return fb; } }
     function gmSet(k, v) { try { GM_setValue(k, v); } catch (_) {} }
     function gmDel(k) { try { GM_deleteValue(k); } catch (_) {} }
+
+    // AR 签到状态持久化：按日期存储 state 和 note
+    function saveArNote(state, note) {
+        try {
+            const data = { date: todayStr(), state: state, note: note };
+            gmSet(AR.NOTEKEY, JSON.stringify(data));
+        } catch (_) {}
+    }
+    function loadArNote() {
+        try {
+            const data = JSON.parse(gmGet(AR.NOTEKEY, "null"));
+            if (data && data.date === todayStr()) return { state: data.state, note: data.note };
+        } catch (_) {}
+        return null;
+    }
+
     // 主动访问自动登录的节流：10分钟内同一站点不重复触发
     function autoLoginAllowed(key) { return Date.now() - Number(gmGet(key, 0) || 0) > AUTO_LOGIN_COOLDOWN; }
     function markAutoLogin(key) { gmSet(key, Date.now()); }
@@ -240,7 +257,7 @@
                 }
             })();
         } else if (isEntryPath()) {
-            // 主动访问：未登录则自动登录（10分钟节流），成功计入当天签到
+            // 主动访问：未登录则自动登录（10分钟节流），仅登录不计入签到
             (async function () {
                 if (!autoLoginAllowed(AR.AUTOKEY)) return;
                 if (await siteLoggedIn()) return;
@@ -248,7 +265,6 @@
                 try {
                     const b = await (await fetch("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" })).json();
                     if (b && b.data) {
-                        gmSet(AR.DAYKEY, todayStr());     // 合并计入当天签到
                         location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(b.data));
                     }
                 } catch (_) {}
@@ -387,10 +403,13 @@
         if (!force && gmGet(AR.DAYKEY, "") === today) { arState = "ok"; render(); return; }
         arState = "running"; arNote = ""; render();
         arOAuth(function (s) { arNote = s; render(); }, true).then(function () {
-            gmSet(AR.DAYKEY, today); arState = "ok"; arNote = "签到完成"; render();
-            setTimeout(function () { if (arNote === "签到完成") { arNote = ""; render(); } }, 3000);
+            gmSet(AR.DAYKEY, today); arState = "ok"; arNote = "✓今日已签到";
+            saveArNote("ok", arNote);
+            render();
         }).catch(function (e) {
-            arState = "fail"; arNote = "AR失败:" + (e && e.message || e); render();
+            arState = "fail"; arNote = "AR失败:" + (e && e.message || e);
+            saveArNote("fail", arNote);
+            render();
         });
     }
     let plan = { topics: 0, replies: 0, likes: 0 };
@@ -745,6 +764,7 @@
             if (rc >= COMMON.REFUSE_START) { banMsg = "⛔ 本窗口已发" + rc + "次，约" + minutesUntilBelow(COMMON.SAFE_RESUME) + "分钟后再来"; finishedOnce = false; render(); return; }
         }
         banMsg = ""; endNote = ""; frozenTimer = ""; running = true; abort = false; activeMode = mode; startedAt = Date.now(); consecCf = 0;
+        arNote = "";                                        // 开始刷帖：第4行让位给刷帖进度
         sent.topics = 0; sent.replies = 0; sent.likes = 0; sent.timingReq = 0; handledLikeTopics.clear();
         plan.topics = 0; plan.replies = 0; plan.likes = 0;
         markButtons(mode); if (uiTimer) clearInterval(uiTimer); uiTimer = setInterval(render, 1000); render();
@@ -866,10 +886,10 @@
         const btnCss = "flex:1;padding:9px 2px;border:none;border-radius:7px;color:#fff;cursor:pointer;font-size:12px;white-space:nowrap;";
         const smallBtnCss = "padding:3px 6px;border:none;border-radius:4px;cursor:pointer;font-size:10px;margin-left:4px;";
         p.innerHTML =
-            '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;">' +
+            '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;padding-top:5px;padding-bottom:1px;line-height:normal;">' +
             '<span style="font-weight:bold;">⚡ LINUX DO 助手</span>' +
             '<span style="display:flex;align-items:center;">' +
-            '<button id="ldh_ar" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AgentRouter每日签到">Agent</button>' +
+            '<button id="ldh_ar" style="' + smallBtnCss + 'background:#666;color:#fff;" title="Agent">Agent</button>' +
             '<button id="ldh_any" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AnyRouter">Any</button>' +
             '<span id="ldh_sync" style="cursor:pointer;font-size:10px;color:#8fe0b0;margin-left:6px;">⟳同步</span>' +
             '<span id="ldh_min" style="cursor:pointer;margin-left:6px;font-size:13px;color:#ccc;">－</span>' +
@@ -898,6 +918,11 @@
         watchComposer();
         const last = readJson("ld_helper_last", null);
         if (last && last.sent) { sent.topics = last.sent.topics; sent.replies = last.sent.replies; sent.likes = last.sent.likes; finishedOnce = true; frozenTimer = last.frozen || ""; endNote = last.endNote || ""; }
+
+        // 恢复当天的 AR 签到状态
+        const saved = loadArNote();
+        if (saved) { arState = saved.state; arNote = saved.note; }
+
         render();
         // 运行中误关页面时提醒一下（尤其是 500 分钟的日常挂机）
         window.addEventListener("beforeunload", function (e) { if (running) { e.preventDefault(); e.returnValue = ""; return ""; } });
