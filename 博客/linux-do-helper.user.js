@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
-// @version      6.7.4
+// @version      6.7.5
 // @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。集成 AgentRouter 每日自动签到(纯代码) 与 AnyRouter 一键登录。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
@@ -356,7 +356,7 @@
                 clearInterval(iv);
                 const d = parseConnectRoot(document);
                 const okStore = d && storeTL3(d, passedUser);
-                toast(okStore ? (d.locked ? "等级0/1：未到2级，已记录 ✔" : "✅ 等级3进度已同步") : "等级3：没读到账号，回 linux.do 点 ⟳ 重试");
+                toast(okStore ? (d.locked ? "等级0/1：未到2级，已记录 ✔" : "✅ 等级3进度已同步") : "等级0/1：没读到账号，回 linux.do 点 ⟳ 重试");
                 if (autoClose && okStore) setTimeout(function () { try { window.close(); } catch (_) {} }, 1000);
             } else if (tries > 25) { clearInterval(iv); if (autoClose) setTimeout(function () { try { window.close(); } catch (_) {} }, 500); }
         }, 800);
@@ -806,6 +806,11 @@
         const r4 = document.getElementById("ldh_r4");
         const word = running ? (M ? M.name + "中" : "正在运行") : (finishedOnce ? "脚本结束" : "准备就绪");
         if (banMsg && !running && !finishedOnce) r4.innerHTML = '<span style="color:#ff8a8a;">' + banMsg + "</span>";
+        else if (!running && !finishedOnce && arNote) {
+            // 未跑刷帖时，第4行显示 Agent 签到状态（当天有效，刷新后仍在）
+            const col = arState === "ok" ? "#8fe0b0" : arState === "fail" ? "#ff8a8a" : arState === "running" ? "#e0c060" : "#ccc";
+            r4.innerHTML = '<span style="color:' + col + ';">Agent：' + arNote + "</span>";
+        }
         else {
             const goal = running && plan.topics ? '<span style="color:#888;">/' + plan.topics + "</span>" : "";
             const goalR = running && plan.replies ? '<span style="color:#888;">/' + plan.replies + "</span>" : "";
@@ -839,19 +844,48 @@
         });
     }
     let manualMin = false, composerMin = false;
+    const PANEL_SCALE = "scale(0.9)";
+    const PANEL_DEF = { left: "16px", bottom: "18px" };
+    // 回到默认位置（底部距离保持 18px 不变）
+    function resetPos(p) {
+        if (!p) return;
+        try { sessionStorage.removeItem("ldh_pos"); } catch (_) {}
+        p.style.left = PANEL_DEF.left;
+        p.style.top = "auto";
+        p.style.bottom = PANEL_DEF.bottom;
+    }
     function applyMin() {
         const body = document.getElementById("ldh_body"), ic = document.getElementById("ldh_min"), p = document.getElementById("ldh_panel");
         const collapsed = manualMin || composerMin;
         if (body) body.style.display = collapsed ? "none" : "block";
         if (ic) ic.textContent = collapsed ? "＋" : "－";
         if (p) {
-            if (composerMin) { p.style.transform = ""; const r = p.getBoundingClientRect(); const shift = Math.max(0, Math.min(280, window.innerWidth - r.right - 4)); p.style.transform = "translateX(" + shift + "px)"; }
-            else { p.style.transform = ""; }
+            // 注意：必须始终带上 scale(0.9)，否则躲避输入框时面板会突然放大
+            if (composerMin) {
+                p.style.transform = PANEL_SCALE;
+                const r = p.getBoundingClientRect();
+                const shift = Math.max(0, Math.min(280, window.innerWidth - r.right - 4));
+                p.style.transform = PANEL_SCALE + " translateX(" + shift + "px)";
+            }
+            else { p.style.transform = PANEL_SCALE; }
         }
     }
     function toggleMin() { manualMin = !manualMin; try { sessionStorage.setItem("ldh_min", manualMin ? "1" : "0"); } catch (_) {} applyMin(); }
     function savePos(p) { try { sessionStorage.setItem("ldh_pos", JSON.stringify({ left: p.style.left, top: p.style.top })); } catch (_) {} }
-    function restorePos(p) { try { const q = JSON.parse(sessionStorage.getItem("ldh_pos") || "null"); if (q && q.left && q.top) { p.style.left = q.left; p.style.top = q.top; p.style.bottom = "auto"; } } catch (_) {} }
+    function restorePos(p) {
+        try {
+            const q = JSON.parse(sessionStorage.getItem("ldh_pos") || "null");
+            if (!q || !q.left || !q.top) return;
+            // 越界校验：还原小窗后旧坐标可能落在视口外，会导致面板"消失"
+            const L = parseFloat(q.left), Tp = parseFloat(q.top);
+            if (!isFinite(L) || !isFinite(Tp) ||
+                L < 0 || Tp < 0 ||
+                L > window.innerWidth - 60 || Tp > window.innerHeight - 24) {
+                resetPos(p); return;
+            }
+            p.style.left = q.left; p.style.top = q.top; p.style.bottom = "auto";
+        } catch (_) { resetPos(p); }
+    }
     function enableDrag(p, handle) {
         let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
         handle.addEventListener("mousedown", function (e) {
@@ -881,12 +915,12 @@
     function createUI() {
         if (document.getElementById("ldh_panel")) return;
         const p = document.createElement("div"); p.id = "ldh_panel";
-        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:10px 12px;border-radius:10px;width:252px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4);transform:scale(0.9);transform-origin:bottom left;";
+        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:4px 12px 10px 12px;border-radius:10px;width:252px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4);transform:scale(0.9);transform-origin:bottom left;overflow:visible;";
         const rowCss = "white-space:nowrap;overflow:hidden;min-height:15px;";
         const btnCss = "flex:1;padding:9px 2px;border:none;border-radius:7px;color:#fff;cursor:pointer;font-size:12px;white-space:nowrap;";
         const smallBtnCss = "padding:3px 6px;border:none;border-radius:4px;cursor:pointer;font-size:10px;margin-left:4px;";
         p.innerHTML =
-            '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;padding-top:5px;padding-bottom:1px;line-height:normal;">' +
+            '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;min-height:22px;padding:6px 0 3px 0;line-height:1.6;overflow:visible;">' +
             '<span style="font-weight:bold;">⚡ LINUX DO 助手</span>' +
             '<span style="display:flex;align-items:center;">' +
             '<button id="ldh_ar" style="' + smallBtnCss + 'background:#666;color:#fff;" title="Agent">Agent</button>' +
@@ -914,12 +948,16 @@
         document.getElementById("ldh_any").addEventListener("click", function () { anyState = "running"; render(); anyOpenTab(); setTimeout(function () { anyState = "idle"; render(); }, 3000); });
         enableDrag(p, document.getElementById("ldh_title"));
         restorePos(p);
+        // 窗口尺寸一变（最大化/还原/拉伸边缘）→ 回默认位置，防止跑到角落或消失
+        let rzTimer = null;
+        window.addEventListener("resize", function () {
+            if (rzTimer) clearTimeout(rzTimer);
+            rzTimer = setTimeout(function () { rzTimer = null; resetPos(p); applyMin(); }, 200);
+        });
         manualMin = sessionStorage.getItem("ldh_min") === "1"; applyMin();
         watchComposer();
-        const last = readJson("ld_helper_last", null);
-        if (last && last.sent) { sent.topics = last.sent.topics; sent.replies = last.sent.replies; sent.likes = last.sent.likes; finishedOnce = true; frozenTimer = last.frozen || ""; endNote = last.endNote || ""; }
-
-        // 恢复当天的 AR 签到状态
+        // 新开页面不再恢复上次的刷帖结束信息，第4行留给 Agent 签到状态
+        // 恢复当天的 AR 签到状态（零点~23:59 有效，刷新/重开都显示）
         const saved = loadArNote();
         if (saved) { arState = saved.state; arNote = saved.note; }
 
