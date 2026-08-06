@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
-// @version      6.7.5
+// @version      6.7.6
 // @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。集成 AgentRouter 每日自动签到(纯代码) 与 AnyRouter 一键登录。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
@@ -114,6 +114,7 @@
         FLOW: "ar_tab_flow",          // 跨页面状态机（兜底流程用）
         DAYKEY: "ar_last_ok_day",     // 当天签到成功的日期戳（本地日期字符串）
         NOTEKEY: "ar_checkin_note",   // 当天签到状态（按日期存储，包含state和note）
+        UIDKEY: "ar_user_id",         // New-API-User 头所需的用户ID（登录后自动学习并持久化）
         AUTOKEY: "ar_auto_login_ts"   // 主动访问自动登录的节流时间戳
     };
     const ANY = {
@@ -154,12 +155,19 @@
     function markAutoLogin(key) { gmSet(key, Date.now()); }
 
     // ---- 跨域请求（GM）----
+    // AgentRouter(New-API) 后端强制校验 New-API-User 头，缺失会报"未提供 New-Api-User"
+    let AR_UID = Number(gmGet(AR.UIDKEY, 0)) || 0;
+    function setArUid(id) { id = Number(id) || 0; if (id > 0 && id !== AR_UID) { AR_UID = id; gmSet(AR.UIDKEY, id); } }
     function gmFetch(url, opts) {
         opts = opts || {};
         return new Promise(function (resolve, reject) {
             if (typeof GM_xmlhttpRequest !== "function") { reject(new Error("缺少跨域权限")); return; }
+            const h = {};
+            if (AR_UID > 0) h["New-API-User"] = String(AR_UID);
+            const ex = opts.headers || {};
+            Object.keys(ex).forEach(function (k) { h[k] = ex[k]; });
             GM_xmlhttpRequest({
-                method: opts.method || "GET", url: url, headers: opts.headers || {},
+                method: opts.method || "GET", url: url, headers: h,
                 withCredentials: true, timeout: 20000,
                 onload: function (r) { resolve(r); },
                 onerror: function () { reject(new Error("网络错误")); },
@@ -189,6 +197,22 @@
         } catch (_) { const m = (html || "").match(/\/oauth2\/approve\/[A-Za-z0-9_\-]+/); return m ? m[0] : null; }
     }
     // withLogout=true 为每日签到（先退出再登录才会触发签到）；false 仅补登录态
+    // 后台静默开一次 agentrouter，让该站分支把 user.id 写进 GM 存储（你允许后台打开）
+    function arLearnUidViaTab() {
+        return new Promise(function (resolve) {
+            let handle = null;
+            try { handle = GM_openInTab(AR.HOST + "/console", { active: false, insert: true, setParent: true }); } catch (_) {}
+            if (!handle) { resolve(false); return; }
+            let n = 0;
+            const iv = setInterval(function () {
+                n++;
+                const id = Number(gmGet(AR.UIDKEY, 0)) || 0;
+                if (id > 0) { AR_UID = id; clearInterval(iv); try { handle.close(); } catch (_) {} resolve(true); }
+                else if (n > 20) { clearInterval(iv); try { handle.close(); } catch (_) {} resolve(false); }
+            }, 700);
+        });
+    }
+
     async function arOAuth(say, withLogout) {
         if (withLogout) { say("退出登录…"); await gmFetch(AR.HOST + "/api/user/logout").catch(function () {}); }
         say("获取 state…");
@@ -204,8 +228,20 @@
         const cs = paramsFrom(ar.finalUrl) || paramsFromText(ar.responseText);
         if (cs) { say("回调登录…"); await gmFetch(AR.HOST + "/api/oauth/linuxdo?aff=&code=" + encodeURIComponent(cs.code) + "&state=" + encodeURIComponent(cs.state)).catch(function () {}); }
         say("校验…");
-        const self = await gmJson(AR.HOST + "/api/user/self");
-        if (!self.data || !self.data.id) throw new Error("仍未登录");
+        let self;
+        try {
+            self = await gmJson(AR.HOST + "/api/user/self");
+        } catch (e) {
+            // 首次运行且从未学到 UID 时，New-API 会拒绝请求；用后台标签兜底学一次再重试
+            if (!AR_UID && /New-Api-User|无权|未提供/i.test(e && e.message || "")) {
+                say("学习用户ID…");
+                await arLearnUidViaTab();
+                if (AR_UID) self = await gmJson(AR.HOST + "/api/user/self");
+                else throw new Error("无法获取用户ID，请先手动登录一次 agentrouter.org");
+            } else throw e;
+        }
+        if (!self || !self.data || !self.data.id) throw new Error("仍未登录");
+        setArUid(self.data.id);          // 学习 UID，供后续请求带 New-API-User 头
         return self.data;
     }
 
@@ -238,6 +274,8 @@
 
     // ================= agentrouter.org 分支 =================
     if (location.hostname === "agentrouter.org") {
+        // 只要本站已登录，就把 user.id 学下来，供 linux.do 侧请求带 New-API-User 头
+        (function () { const u = getStoredUser(); if (u && u.id) setArUid(u.id); })();
         const flow = gmGet(AR.FLOW, null);
         if (flow) {
             // 兜底状态机（由 linux.do 侧发起）
@@ -889,7 +927,10 @@
     function enableDrag(p, handle) {
         let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
         handle.addEventListener("mousedown", function (e) {
+            // 标题栏里的任何可点元素都不该触发拖拽（否则 bottom→auto 会让面板整体下移）
+            if (e.target.closest("button") || e.target.closest("a")) return;
             if (e.target.closest("#ldh_sync") || e.target.closest("#ldh_min")) return;
+            if (e.button !== 0) return;
             const r = p.getBoundingClientRect(); ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY; dragging = true;
             p.style.left = ox + "px"; p.style.top = oy + "px"; p.style.bottom = "auto"; e.preventDefault();
         });
