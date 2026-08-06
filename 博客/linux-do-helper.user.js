@@ -40,8 +40,11 @@
         IDLE_LIKES:    [0, 0],         // 点赞数量
 
         // ---- 全局：每次向服务器上传阅读进度(timings)的间隔（秒）----
-        // 必须 >0 且 <100 秒才会被 Discourse 计入总阅读时间，这里默认上限 50 秒留足余量。
-        // 脚本会自动增减「每次上传的帖子数」来把实际间隔压进这个区间，并匀速铺满整个运行时长。
+        // 每一次上传的间隔都在这个区间内【均匀真随机】抽取，所以第1次可能隔 8 秒、
+        // 第2次隔 47 秒、第3次隔 21 秒，每次都不同，不会出现"每次都无限接近上限"的雷同模式。
+        // 注意：间隔必须 >0 且 <100 秒才会被 Discourse 计入总阅读时间，上限别写太大。
+        // 实际上限会自动收窄：若"剩余主题数"要求发更多次请求，脚本会压低上限保证跑完计划量；
+        // 帖子数不够时每次只传 1 楼，也绝不提前收工，全程铺满到最后一秒。
         REQ_GAP_SEC:   [0, 60]
     };
     /* ==================== 配置区结束 ==================== */
@@ -144,7 +147,7 @@
     const MODES = {
         daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 20, safety: 160,      noLimit: false },
         fast:  { key: "fast",  name: "快速升级", color: "#33507a", minutes: CFG.FAST_MINUTES,  topics: CFG.FAST_TOPICS,  replies: CFG.FAST_REPLIES,  likes: CFG.FAST_LIKES,  minPosts: 20, safety: 175,      noLimit: false },
-        idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a", minutes: CFG.IDLE_MINUTES,  topics: CFG.IDLE_TOPICS,  replies: CFG.IDLE_REPLIES,  likes: CFG.IDLE_LIKES,  minPosts: 8,  safety: Infinity, noLimit: true  }
+        idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a", minutes: CFG.IDLE_MINUTES,  topics: CFG.IDLE_TOPICS,  replies: CFG.IDLE_REPLIES,  likes: CFG.IDLE_LIKES,  minPosts: 8,  safety: Infinity, noLimit: true,  fullRandom: true  }
     };
     const MODE_KEYS = ["daily", "fast", "idle"];
     function totalMs(M) { return M.minutes * 60 * 1000; }
@@ -219,27 +222,57 @@
         return Math.max(1, Math.ceil((arr[arr.length - target - 1] + COMMON.WINDOW_MS - now) / 60000));
     }
 
-    /* ---- 核心调度：把剩余配额匀速摊到剩余时间上 ----
-     * remReq  = 剩余还要发多少次 timings 请求
-     *           下限由「间隔不得超过 GAP_MAX_MS」倒推：ceil(剩余时间 / GAP_MAX)
-     *           同时不少于「剩余待完成主题数」（每个主题至少要发 1 次）
-     * batch   = 剩余帖子数 / remReq  → 每次上传带多少楼（自动增减以维持间隔）
-     * interval= 剩余时间 / remReq    → 钳在 [GAP_MIN, GAP_MAX] 之间
-     * 由于 interval 永远等于「剩余时间 ÷ 剩余请求数」，脚本一定匀速铺满到最后一秒，
-     * 不会提前跑完再空转；配额提前用完时 batch 自动降到 1，只维持心跳请求。
+    /* ---- 核心调度：间隔真随机 + 全程铺满 ----
+     * cap     = 本次可用的间隔上限。取 min(GAP_MAX, 2 × 剩余时间 ÷ 最少请求数)。
+     *           乘 2 是因为 [0,cap] 均匀分布的期望是 cap/2，这样平均下来正好铺满剩余时间。
+     *           「最少请求数」= max(剩余主题数, 剩余时间÷GAP_MAX)，保证计划的主题数能跑完。
+     * interval= 在 [GAP_MIN, cap] 内【均匀真随机】抽取 —— 每次都不同，不会雷同贴着上限。
+     * batch   = 剩余帖子数 ÷ 预估剩余请求数，最低 1 楼（帖子不够就每次只传 1 楼，不硬凑大包）。
+     * 因为每次都用「当前剩余时间/剩余量」重算，跑快跑慢都会自动纠偏，
+     * 一定铺满到最后一秒，不会提前跑完再空转。
      */
     function schedule(T) {
+        const M = MODES[activeMode];                           // 从全局取，engine 里的 M 在此不可见
         const remTime = Math.max(0, T - elapsed());
         const remReplies = Math.max(0, plan.replies - sent.replies);
         const remTopics = Math.max(0, plan.topics - sent.topics);
-        let remReq = Math.ceil(remTime / GAP_MAX_MS);
-        remReq = Math.max(remReq, remTopics, 1);
-        let batch = remReplies > 0 ? Math.round(remReplies / remReq) : 1;
-        batch = clamp(batch, 1, COMMON.MAX_BATCH);
-        let interval = remTime / remReq;
-        interval = interval * (0.85 + Math.random() * 0.30);      // 轻微抖动，避免机械等距
-        interval = clamp(Math.round(interval), GAP_MIN_MS, GAP_MAX_MS);
-        return { batch: batch, interval: interval, remReq: remReq, remTime: remTime };
+        // 至少要发这么多次：既要满足"间隔不超过 GAP_MAX"，也要够把剩下的主题跑完
+        let minReq = Math.max(Math.ceil(remTime / GAP_MAX_MS), remTopics, 1);
+        // 短模式：剩余请求数不得超过 safety 余额，否则间隔会被压得越来越短直到撞上限
+        if (M && !M.fullRandom) {
+            const left = Math.max(1, M.safety - 5 - sent.timingReq);
+            minReq = Math.max(1, Math.min(minReq, left));
+        }
+        const avg = remTime / minReq;                          // 铺满剩余时间所需的平均间隔
+        let interval, cap, estReq, batchOverride = null;
+        if (M && M.fullRandom) {
+            // 日常挂机：时间充裕，间隔在 [下限, cap] 内均匀真随机。
+            // 均匀分布期望为 cap/2，故 cap 取 2×avg，平均下来正好铺满。
+            cap = clamp(Math.round(avg * 2), GAP_MIN_MS + 200, GAP_MAX_MS);
+            interval = randInt(GAP_MIN_MS, cap);
+            estReq = Math.max(1, Math.round(remTime / Math.max(1, cap / 2)));
+        } else {
+            // 日常维护/快速升级：跟原脚本一致，只保证「单轮请求总数 ≤ safety」，
+            // 不看每小时频率（跨次运行由 1 小时窗口的 165/185 负责）。
+            // 由 safety 倒推每次至少带多少楼：
+            //   总请求 ≈ 主题数 + 帖子数/batch ≤ safety  →  batch ≥ 帖子数/(safety-主题数)
+            const room = Math.max(1, M.safety - plan.topics - 5);   // 留 5 次余量
+            const minBatch = Math.max(1, Math.ceil(plan.replies / room));
+            // 按剩余量算需要的 batch，再用 minBatch 兜底，避免超发帖子/撞 safety
+            const need = remReplies > 0 ? Math.ceil(remReplies / Math.max(1, room - sent.timingReq)) : 1;
+            batchOverride = randInt(Math.max(minBatch, need), Math.min(Math.max(minBatch, need) + 8, COMMON.MAX_BATCH));
+            if (remReplies > 0) batchOverride = Math.min(batchOverride, remReplies);
+            else batchOverride = 1;                              // 帖子配额已满：只发心跳，别再超发
+            const lo = Math.max(GAP_MIN_MS, Math.round(avg * 0.4));
+            const hi = Math.max(lo + 500, Math.min(GAP_MAX_MS, Math.round(avg * 1.6)));
+            interval = randInt(lo, hi);                              // 间隔仍每次随机
+            cap = hi;
+            estReq = minReq;
+        }
+        let batch = batchOverride !== null ? batchOverride
+                  : (remReplies > 0 ? Math.round(remReplies / estReq) : 1);
+        batch = clamp(batch, 1, COMMON.MAX_BATCH);            // 帖子不够就每次只传 1 楼
+        return { batch: batch, interval: interval, remReq: estReq, remTime: remTime, cap: cap };
     }
 
     // ---- API ----
