@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
-// @version      6.7.3
+// @version      6.7.4
 // @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
@@ -132,6 +132,7 @@
         MSECS_MIN: 800, MSECS_MAX: 1400,
         FLOOR_INTERVAL: 800,                 // 物理最小间隔，防止把服务器打爆（CFG.REQ_GAP_SEC[0]=0 时生效）
         MAX_BATCH: 60,                       // 单次 timings 最多带多少楼
+        TOPIC_OVERHEAD_MS: 2300,             // 每进一个新主题的固定开销(请求往返+ENTER sleep)，用于时间预算
         ENTER_MIN: 700, ENTER_MAX: 1200,
         HARD_BLOCK_RETRY_THRESHOLD: 600, CF_BACKOFF_MS: 10000, MAX_CONSEC_CF: 5,
         LIKE_REACTION: "heart",
@@ -145,8 +146,8 @@
     const GAP_MAX_MS = Math.max(GAP_MIN_MS + 1000, Math.round(CFG.REQ_GAP_SEC[1] * 1000));
 
     const MODES = {
-        daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 20, safety: 160,      noLimit: false },
-        fast:  { key: "fast",  name: "快速升级", color: "#33507a", minutes: CFG.FAST_MINUTES,  topics: CFG.FAST_TOPICS,  replies: CFG.FAST_REPLIES,  likes: CFG.FAST_LIKES,  minPosts: 20, safety: 175,      noLimit: false },
+        daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 5, safety: 160,      noLimit: false },
+        fast:  { key: "fast",  name: "快速升级", color: "#33507a", minutes: CFG.FAST_MINUTES,  topics: CFG.FAST_TOPICS,  replies: CFG.FAST_REPLIES,  likes: CFG.FAST_LIKES,  minPosts: 5, safety: 175,      noLimit: false },
         idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a", minutes: CFG.IDLE_MINUTES,  topics: CFG.IDLE_TOPICS,  replies: CFG.IDLE_REPLIES,  likes: CFG.IDLE_LIKES,  minPosts: 8,  safety: Infinity, noLimit: true,  fullRandom: true  }
     };
     const MODE_KEYS = ["daily", "fast", "idle"];
@@ -256,15 +257,23 @@
             // 不看每小时频率（跨次运行由 1 小时窗口的 165/185 负责）。
             // 由 safety 倒推每次至少带多少楼：
             //   总请求 ≈ 主题数 + 帖子数/batch ≤ safety  →  batch ≥ 帖子数/(safety-主题数)
-            const room = Math.max(1, M.safety - plan.topics - 5);   // 留 5 次余量
-            const minBatch = Math.max(1, Math.ceil(plan.replies / room));
-            // 按剩余量算需要的 batch，再用 minBatch 兜底，避免超发帖子/撞 safety
-            const need = remReplies > 0 ? Math.ceil(remReplies / Math.max(1, room - sent.timingReq)) : 1;
-            batchOverride = randInt(Math.max(minBatch, need), Math.min(Math.max(minBatch, need) + 8, COMMON.MAX_BATCH));
-            if (remReplies > 0) batchOverride = Math.min(batchOverride, remReplies);
-            else batchOverride = 1;                              // 帖子配额已满：只发心跳，别再超发
-            const lo = Math.max(GAP_MIN_MS, Math.round(avg * 0.4));
-            const hi = Math.max(lo + 500, Math.min(GAP_MAX_MS, Math.round(avg * 1.6)));
+            const room = Math.max(1, M.safety - 5);                 // 可用请求预算
+            const rr = Math.max(0, plan.replies - sent.replies);
+            const rt = Math.max(0, plan.topics - sent.topics);
+            // 还需要多少次请求：帖子要拆几次 + 每个未完成主题至少 1 次
+            const reqForPosts = rr > 0 ? Math.ceil(rr / COMMON.MAX_BATCH) : 0;
+            const needReq = Math.max(rt, reqForPosts, 1);
+            const budgetReq = Math.max(1, Math.min(needReq, room - sent.timingReq));
+            // 每次带多少楼：把剩余帖子摊到剩余请求上
+            batchOverride = rr > 0 ? Math.ceil(rr / budgetReq) : 1;
+            batchOverride = clamp(batchOverride, 1, COMMON.MAX_BATCH);
+            // 间隔 = (剩余时间 - 剩余主题的固定开销) ÷ 剩余请求数，再随机拖动
+            // 每进一个新主题要花 ~2.3 秒(请求往返+固定sleep)，不预留会导致时间超支跑不满
+            const overhead = rt * COMMON.TOPIC_OVERHEAD_MS;
+            const usable = Math.max(0, remTime - overhead);
+            const avgGap = usable / budgetReq;
+            const lo = Math.max(GAP_MIN_MS, Math.round(avgGap * 0.4));
+            const hi = Math.max(lo + 500, Math.min(GAP_MAX_MS, Math.round(avgGap * 1.6)));
             interval = randInt(lo, hi);                              // 间隔仍每次随机
             cap = hi;
             estReq = minReq;
@@ -330,19 +339,15 @@
     }
     async function refillPool(minPosts) {
         let rounds = 0;
-        while (pool.queue.length < 40 && rounds < 12 && !pool.exhausted && !abort) {
+        // 目标：池子里至少攒够剩余还需要的主题数（上限 120），避免主题跑不满
+        const M = MODES[activeMode];
+        const stillNeed = M ? Math.max(0, plan.topics - sent.topics) : 40;
+        const target = Math.max(40, Math.min(120, stillNeed + 20));
+        while (pool.queue.length < target && rounds < 40 && !pool.exhausted && !abort) {
             rounds++;
             const base = TOPIC_SOURCES[pool.src];
             const url = base + (base.indexOf("?") >= 0 ? "&" : "?") + "per_page=50&page=" + pool.page;
             const raw = await listTopics(url);
-            // 翻到下一源 / 下一页
-            if (!raw.length) {
-                pool.src++;
-                if (pool.src >= TOPIC_SOURCES.length) { pool.src = 0; pool.page++; if (pool.page > 20) { pool.exhausted = true; } }
-            } else {
-                pool.src++;
-                if (pool.src >= TOPIC_SOURCES.length) { pool.src = 0; pool.page++; }
-            }
             const fresh = [];
             raw.forEach(function (t) {
                 const id = t && t.id ? String(t.id) : "";
@@ -351,7 +356,15 @@
                 if (h >= minPosts && Number(t.last_read_post_number || 0) < h) { pool.seen.add(id); fresh.push(id); }
             });
             pool.queue = pool.queue.concat(shuffle(fresh));
-            await sleep(randInt(200, 500));
+            // 本源这一页没货了就换下一个源；所有源都轮过一遍再翻页
+            if (raw.length < 10 || !fresh.length) {
+                pool.src++;
+                if (pool.src >= TOPIC_SOURCES.length) {
+                    pool.src = 0; pool.page++;
+                    if (pool.page > 30) pool.exhausted = true;
+                }
+            }
+            await sleep(randInt(150, 350));
         }
         return pool.queue.length > 0;
     }
@@ -434,12 +447,11 @@
             await sleep(randInt(COMMON.ENTER_MIN, COMMON.ENTER_MAX));
             if (!meta.ok || meta.highest < 2) continue;
 
-            // 本主题打算读多少楼：按「剩余帖子 ÷ 剩余主题」摊，并保证够切成整数个 batch
-            const s0 = schedule(T);
+            // 本主题读多少楼 = 剩余帖子 ÷ 剩余主题（严格按配额摊，不被 batch 抬高）
             const remTopics = Math.max(1, plan.topics - sent.topics);
             const remReplies = Math.max(0, plan.replies - sent.replies);
-            let want = remReplies > 0 ? Math.round((remReplies / remTopics) * (0.7 + Math.random() * 0.6)) : s0.batch;
-            want = clamp(want, s0.batch, s0.batch * 8);
+            let want = Math.round((remReplies / remTopics) * (0.8 + Math.random() * 0.4));
+            want = Math.max(1, Math.min(want, remReplies));      // 至少1楼，且不超剩余配额
 
             const start = Math.max(2, meta.lastRead + 1);
             const end = Math.min(meta.highest, start + want - 1);
@@ -453,7 +465,8 @@
                 if (abort || elapsed() >= T) break;
 
                 const s = schedule(T);
-                const batch = nums.slice(p, p + s.batch);
+                const take = Math.max(1, Math.min(s.batch, nums.length - p));
+                const batch = nums.slice(p, p + take);
                 if (!batch.length) break;
                 sent.timingReq++;
                 const res = await postTimings(tid, batch);
