@@ -2,14 +2,18 @@
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
 // @version      6.7.4
-// @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
+// @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。集成 AgentRouter 每日自动签到(纯代码) 与 AnyRouter 一键登录。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
+// @match        https://agentrouter.org/*
+// @match        https://anyrouter.top/*
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @connect      connect.linux.do
+// @connect      agentrouter.org
 // @run-at       document-end
 // ==/UserScript==
 
@@ -101,8 +105,224 @@
         return true;
     }
 
-    // ================= connect.linux.do 分支：抓等级3存 GM，然后结束 =================
+    /* ============================================================
+     * AgentRouter / AnyRouter 集成
+     * ============================================================ */
+    const AR = {
+        HOST: "https://agentrouter.org",
+        CLIENT_ID: "KZUecGfhhDZMVnv8UtEdhOhf9sNOhqVX",
+        FLOW: "ar_tab_flow",          // 跨页面状态机（兜底流程用）
+        DAYKEY: "ar_last_ok_day",     // 当天签到成功的日期戳（本地日期字符串）
+        AUTOKEY: "ar_auto_login_ts"   // 主动访问自动登录的节流时间戳
+    };
+    const ANY = {
+        HOST: "https://anyrouter.top",
+        CLIENT_ID_FB: "8w2uZtoWH9AUXrZr1qeCEEmvXLafea3c",
+        FLOW: "anyrouter_login_flow_v1",
+        TTL: 3 * 60 * 1000,
+        AUTOKEY: "any_auto_login_ts"
+    };
+    const CONNECT_HOST = "https://connect.linux.do";
+    const AUTO_LOGIN_COOLDOWN = 10 * 60 * 1000;   // 主动访问自动登录：10分钟内不重复
+
+    function todayStr() {
+        const d = new Date();
+        return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    }
+    function gmGet(k, fb) { try { return GM_getValue(k, fb); } catch (_) { return fb; } }
+    function gmSet(k, v) { try { GM_setValue(k, v); } catch (_) {} }
+    function gmDel(k) { try { GM_deleteValue(k); } catch (_) {} }
+    // 主动访问自动登录的节流：10分钟内同一站点不重复触发
+    function autoLoginAllowed(key) { return Date.now() - Number(gmGet(key, 0) || 0) > AUTO_LOGIN_COOLDOWN; }
+    function markAutoLogin(key) { gmSet(key, Date.now()); }
+
+    // ---- 跨域请求（GM）----
+    function gmFetch(url, opts) {
+        opts = opts || {};
+        return new Promise(function (resolve, reject) {
+            if (typeof GM_xmlhttpRequest !== "function") { reject(new Error("缺少跨域权限")); return; }
+            GM_xmlhttpRequest({
+                method: opts.method || "GET", url: url, headers: opts.headers || {},
+                withCredentials: true, timeout: 20000,
+                onload: function (r) { resolve(r); },
+                onerror: function () { reject(new Error("网络错误")); },
+                ontimeout: function () { reject(new Error("请求超时")); }
+            });
+        });
+    }
+    async function gmJson(url, opts) {
+        const r = await gmFetch(url, opts);
+        let b; try { b = JSON.parse(r.responseText); } catch (_) { throw new Error("返回非JSON"); }
+        if (r.status >= 400 || b.success === false) throw new Error(b.message || ("HTTP " + r.status));
+        return b;
+    }
+
+    // ---- AgentRouter：纯代码 OAuth ----
+    function paramsFrom(u) { try { const x = new URL(u); const c = x.searchParams.get("code"), s = x.searchParams.get("state"); if (c && s) return { code: c, state: s }; } catch (_) {} return null; }
+    function paramsFromText(t) {
+        const c = (t || "").match(/[?&]code=([^&"'\s]+)/), s = (t || "").match(/[?&]state=([^&"'\s]+)/);
+        return (c && s) ? { code: decodeURIComponent(c[1]), state: decodeURIComponent(s[1]) } : null;
+    }
+    function parseApprove(html) {
+        try {
+            const doc = new DOMParser().parseFromString(html, "text/html");
+            const links = Array.prototype.slice.call(doc.querySelectorAll('a[href^="/oauth2/approve/"]'));
+            const yes = links.find(function (a) { return (a.textContent || "").replace(/\s+/g, "") === "允许"; }) || links[0];
+            return yes ? yes.getAttribute("href") : null;
+        } catch (_) { const m = (html || "").match(/\/oauth2\/approve\/[A-Za-z0-9_\-]+/); return m ? m[0] : null; }
+    }
+    // withLogout=true 为每日签到（先退出再登录才会触发签到）；false 仅补登录态
+    async function arOAuth(say, withLogout) {
+        if (withLogout) { say("退出登录…"); await gmFetch(AR.HOST + "/api/user/logout").catch(function () {}); }
+        say("获取 state…");
+        const st = await gmJson(AR.HOST + "/api/oauth/state?mode=login");
+        const state = st.data;
+        if (!state) throw new Error("未拿到 state");
+        say("请求授权页…");
+        const a = await gmFetch(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(state));
+        const ap = parseApprove(a.responseText);
+        if (!ap) throw new Error("授权页无允许链接");
+        say("点击允许…");
+        const ar = await gmFetch(CONNECT_HOST + (ap.charAt(0) === "/" ? ap : "/" + ap));
+        const cs = paramsFrom(ar.finalUrl) || paramsFromText(ar.responseText);
+        if (cs) { say("回调登录…"); await gmFetch(AR.HOST + "/api/oauth/linuxdo?aff=&code=" + encodeURIComponent(cs.code) + "&state=" + encodeURIComponent(cs.state)).catch(function () {}); }
+        say("校验…");
+        const self = await gmJson(AR.HOST + "/api/user/self");
+        if (!self.data || !self.data.id) throw new Error("仍未登录");
+        return self.data;
+    }
+
+
+    // ---- AnyRouter：状态机 + 自动登录 ----
+    function anyGetFlow() {
+        try {
+            const f = JSON.parse(gmGet(ANY.FLOW, "null"));
+            if (!f || !f.ts || Date.now() - f.ts > ANY.TTL) { gmDel(ANY.FLOW); return null; }
+            return f;
+        } catch (_) { return null; }
+    }
+    function anyOpenTab() {
+        gmSet(ANY.FLOW, JSON.stringify({ step: "start", ts: Date.now() }));
+        try { GM_openInTab(ANY.HOST + "/console", { active: true, insert: true, setParent: true }); } catch (_) { window.open(ANY.HOST + "/console"); }
+    }
+    function getStoredUser() { try { const u = JSON.parse(localStorage.getItem("user") || "null"); return (u && u.id) ? u : null; } catch (_) { return null; } }
+    // 同源检测登录态（在对应站点页面内调用）
+    async function siteLoggedIn() {
+        const u = getStoredUser();
+        if (!u) return false;
+        try {
+            const r = await fetch("/api/user/self", { credentials: "include", cache: "no-store", headers: { "New-API-User": String(u.id) } });
+            const b = await r.json();
+            return !!(r.ok && b.success !== false && b.data && b.data.id);
+        } catch (_) { return false; }
+    }
+    // 主动访问时只在首页/登录页触发
+    function isEntryPath() { const p = location.pathname; return p === "/" || p === "" || p === "/login"; }
+
+    // ================= agentrouter.org 分支 =================
+    if (location.hostname === "agentrouter.org") {
+        const flow = gmGet(AR.FLOW, null);
+        if (flow) {
+            // 兜底状态机（由 linux.do 侧发起）
+            (async function () {
+                const loggedIn = !!getStoredUser();
+                if (flow.step === "authorizing" && loggedIn && location.pathname.indexOf("/console") === 0) {
+                    gmSet(AR.FLOW, { step: "done", ts: Date.now() }); return;
+                }
+                if (flow.step === "start") {
+                    gmSet(AR.FLOW, { step: "authorizing", ts: Date.now() });
+                    try {
+                        await fetch("/api/user/logout", { credentials: "include", cache: "no-store" }).catch(function () {});
+                        localStorage.removeItem("user");
+                        const b = await (await fetch("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" })).json();
+                        location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(b.data));
+                    } catch (e) { gmSet(AR.FLOW, { step: "done", ts: Date.now(), error: String(e) }); }
+                }
+            })();
+        } else if (isEntryPath()) {
+            // 主动访问：未登录则自动登录（10分钟节流），成功计入当天签到
+            (async function () {
+                if (!autoLoginAllowed(AR.AUTOKEY)) return;
+                if (await siteLoggedIn()) return;
+                markAutoLogin(AR.AUTOKEY);
+                try {
+                    const b = await (await fetch("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" })).json();
+                    if (b && b.data) {
+                        gmSet(AR.DAYKEY, todayStr());     // 合并计入当天签到
+                        location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(b.data));
+                    }
+                } catch (_) {}
+            })();
+        }
+        return;
+    }
+
+    // ================= anyrouter.top 分支 =================
+    if (location.hostname === "anyrouter.top") {
+        const f = anyGetFlow();
+        if (f) {
+            // 由 Any 按钮发起的流程
+            (function () {
+                const timer = setInterval(function () {
+                    const cur = anyGetFlow();
+                    if (!cur) { clearInterval(timer); return; }
+                    if (cur.step === "callback" && location.pathname.indexOf("/console") === 0 && getStoredUser()) { gmDel(ANY.FLOW); clearInterval(timer); }
+                }, 300);
+                setTimeout(function () { clearInterval(timer); }, ANY.TTL);
+            })();
+            (async function () {
+                if (location.pathname === "/oauth/linuxdo") { gmSet(ANY.FLOW, JSON.stringify({ step: "callback", ts: Date.now() })); return; }
+                if (await siteLoggedIn()) {
+                    gmDel(ANY.FLOW);
+                    if (location.pathname.indexOf("/console") !== 0) location.replace(ANY.HOST + "/console");
+                    return;
+                }
+                gmSet(ANY.FLOW, JSON.stringify({ step: "authorizing", ts: Date.now() }));
+                await anyStartOAuth();
+            })();
+        } else if (isEntryPath()) {
+            // 主动访问：未登录则自动登录（10分钟节流）
+            (async function () {
+                if (!autoLoginAllowed(ANY.AUTOKEY)) return;
+                if (await siteLoggedIn()) return;
+                markAutoLogin(ANY.AUTOKEY);
+                await anyStartOAuth();
+            })();
+        }
+        return;
+    }
+    async function anyStartOAuth() {
+        try {
+            const sres = await fetch("/api/status", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
+            const cid = (sres && sres.data && sres.data.linuxdo_client_id) || ANY.CLIENT_ID_FB;
+            const st = await fetch("/api/oauth/state", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
+            const state = st && st.data;
+            if (!state) return;
+            location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + encodeURIComponent(cid) + "&state=" + encodeURIComponent(state));
+        } catch (_) {}
+    }
+
+    // ================= connect.linux.do 分支：OAuth 自动点“允许” + 等级3抓取 =================
     if (location.hostname === "connect.linux.do") {
+        // 有 AR/ANY 流程在跑时，授权页自动点“允许”，不走等级3逻辑
+        const oauthPending = !!gmGet(AR.FLOW, null) || !!anyGetFlow() ||
+                             (Date.now() - Number(gmGet(AR.AUTOKEY, 0) || 0) < 60000) ||
+                             (Date.now() - Number(gmGet(ANY.AUTOKEY, 0) || 0) < 60000);
+        if (oauthPending && location.pathname === "/oauth2/authorize") {
+            const clickAllow = function () {
+                const links = Array.prototype.slice.call(document.querySelectorAll('a[href^="/oauth2/approve/"]'));
+                const allow = links.find(function (a) { return (a.textContent || "").replace(/\s+/g, "") === "允许" && a.getClientRects().length > 0; });
+                if (!allow) return false;
+                allow.click(); return true;
+            };
+            if (!clickAllow()) {
+                const ob = new MutationObserver(function () { if (clickAllow()) ob.disconnect(); });
+                try { ob.observe(document.documentElement, { childList: true, subtree: true }); } catch (_) {}
+                setTimeout(function () { ob.disconnect(); }, 30000);
+            }
+            return;
+        }
+
         const hm = location.hash.match(/ldhsync=([^&]*)/);
         const passedUser = hm ? decodeURIComponent(hm[1] || "") : "";
         const autoClose = /ldhsync/.test(location.hash);
@@ -120,7 +340,7 @@
                 clearInterval(iv);
                 const d = parseConnectRoot(document);
                 const okStore = d && storeTL3(d, passedUser);
-                toast(okStore ? (d.locked ? "等级3：未到2级，已记录 ✔" : "✅ 等级3进度已同步") : "等级3：没读到账号，回 linux.do 点 ⟳ 重试");
+                toast(okStore ? (d.locked ? "等级0/1：未到2级，已记录 ✔" : "✅ 等级3进度已同步") : "等级3：没读到账号，回 linux.do 点 ⟳ 重试");
                 if (autoClose && okStore) setTimeout(function () { try { window.close(); } catch (_) {} }, 1000);
             } else if (tries > 25) { clearInterval(iv); if (autoClose) setTimeout(function () { try { window.close(); } catch (_) {} }, 500); }
         }, 800);
@@ -156,7 +376,23 @@
     let running = false, abort = false, activeMode = "", startedAt = 0, csrf = "", consecCf = 0, uiTimer = null;
     let finishedOnce = false, frozenTimer = "", banMsg = "", endNote = "";
     let syncState = "idle", syncAt = 0;
+    let arState = "idle", arNote = "";      // idle|running|ok|fail —— Agent 按钮状态
+    let anyState = "idle";                  // idle|running —— Any 按钮状态
     let me = { username: "" };
+
+    // ---- AR 每日签到：面板建好后调用（每天一次，失败不记录当天，刷新可重跑）----
+    function runArCheckin(force) {
+        if (arState === "running") return;
+        const today = todayStr();
+        if (!force && gmGet(AR.DAYKEY, "") === today) { arState = "ok"; render(); return; }
+        arState = "running"; arNote = ""; render();
+        arOAuth(function (s) { arNote = s; render(); }, true).then(function () {
+            gmSet(AR.DAYKEY, today); arState = "ok"; arNote = "签到完成"; render();
+            setTimeout(function () { if (arNote === "签到完成") { arNote = ""; render(); } }, 3000);
+        }).catch(function (e) {
+            arState = "fail"; arNote = "AR失败:" + (e && e.message || e); render();
+        });
+    }
     let plan = { topics: 0, replies: 0, likes: 0 };
     const sent = { topics: 0, replies: 0, likes: 0, timingReq: 0 };
     const handledLikeTopics = new Set();
@@ -523,7 +759,7 @@
             const s = syncState === "syncing" ? "（后台同步中…）" : syncState === "opening" ? "（正在打开 connect 同步…）" : syncState === "popupblock" ? "（弹窗被拦，允许本站弹窗后再点⟳）" : syncState === "otheruser" ? "（connect 登录的是别的账号，用本号登录）" : syncState === "nogrant" ? "（缺跨域权限，去油猴放行 connect）" : "（点右上 ⟳ 同步，会自动开一次 connect）";
             return ["等级3 未同步", s];
         }
-        if (raw.locked) return ["等级3 未到2级，暂时看不到进度", "达到2级后 connect 才显示明细"];
+        if (raw.locked) return ["等级0/1 未到2级，暂时看不到进度", "达到2级后 connect 才显示明细"];
         const m = raw.metrics || {};
         const A = [mSpan("访问", m.visit_days), mSpan("话题", m.topics_viewed), mSpan("帖子", m.posts_viewed), mSpan("回复", m.topics_replied)].filter(Boolean).join(" ");
         const B = [mSpan("点赞", m.likes_given), mSpan("获赞", m.likes_received), mSpan("获赞天数", m.liked_days), mSpan("获赞用户", m.liked_by_users)].filter(Boolean).join(" ");
@@ -558,6 +794,16 @@
         }
         const sy = document.getElementById("ldh_sync");
         if (sy) { const failed = (syncState === "cf" || syncState === "err" || syncState === "empty" || syncState === "login" || syncState === "nogrant" || syncState === "otheruser" || syncState === "popupblock"); const hasData = !!readTL3(); sy.textContent = (syncState === "syncing" || syncState === "opening") ? "同步中…" : (failed && !hasData) ? "⟳重试" : (syncState === "ok" || hasData) ? "✓已同步" : "⟳同步"; sy.style.color = (failed && !hasData) ? "#ff8a8a" : "#8fe0b0"; }
+        // Agent 按钮：灰=未签到 黄=签到中 绿=已签到 红=失败(可点重试)
+        const ab = document.getElementById("ldh_ar");
+        if (ab) {
+            if (arState === "running") { ab.textContent = "Agent…"; ab.style.background = "#a07d2a"; }
+            else if (arState === "ok") { ab.textContent = "✓Agent"; ab.style.background = "#2f6f3e"; }
+            else if (arState === "fail") { ab.textContent = "Agent!"; ab.style.background = "#8a3a3a"; }
+            else { ab.textContent = "Agent"; ab.style.background = "#666"; }
+        }
+        const nb = document.getElementById("ldh_any");
+        if (nb) { nb.style.background = anyState === "running" ? "#a07d2a" : "#666"; }
     }
     function markButtons(mode) {
         MODE_KEYS.forEach(function (m) {
@@ -615,15 +861,18 @@
     function createUI() {
         if (document.getElementById("ldh_panel")) return;
         const p = document.createElement("div"); p.id = "ldh_panel";
-        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:10px 12px;border-radius:10px;width:280px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4)";
+        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:10px 12px;border-radius:10px;width:252px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4);transform:scale(0.9);transform-origin:bottom left;";
         const rowCss = "white-space:nowrap;overflow:hidden;min-height:15px;";
         const btnCss = "flex:1;padding:9px 2px;border:none;border-radius:7px;color:#fff;cursor:pointer;font-size:12px;white-space:nowrap;";
+        const smallBtnCss = "padding:3px 6px;border:none;border-radius:4px;cursor:pointer;font-size:10px;margin-left:4px;";
         p.innerHTML =
             '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;">' +
             '<span style="font-weight:bold;">⚡ LINUX DO 助手</span>' +
-            '<span>' +
-            '<span id="ldh_sync" style="cursor:pointer;font-size:10px;color:#8fe0b0;">⟳同步</span>' +
-            '<span id="ldh_min" style="cursor:pointer;margin-left:10px;font-size:13px;color:#ccc;">－</span>' +
+            '<span style="display:flex;align-items:center;">' +
+            '<button id="ldh_ar" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AgentRouter每日签到">Agent</button>' +
+            '<button id="ldh_any" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AnyRouter">Any</button>' +
+            '<span id="ldh_sync" style="cursor:pointer;font-size:10px;color:#8fe0b0;margin-left:6px;">⟳同步</span>' +
+            '<span id="ldh_min" style="cursor:pointer;margin-left:6px;font-size:13px;color:#ccc;">－</span>' +
             '</span>' +
             '</div>' +
             '<div id="ldh_body">' +
@@ -641,6 +890,8 @@
         MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
         document.getElementById("ldh_sync").addEventListener("click", function () { sync(); });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
+        document.getElementById("ldh_ar").addEventListener("click", function () { runArCheckin(true); });
+        document.getElementById("ldh_any").addEventListener("click", function () { anyState = "running"; render(); anyOpenTab(); setTimeout(function () { anyState = "idle"; render(); }, 3000); });
         enableDrag(p, document.getElementById("ldh_title"));
         restorePos(p);
         manualMin = sessionStorage.getItem("ldh_min") === "1"; applyMin();
@@ -658,6 +909,8 @@
                 if (Date.now() - lastTs > 5 * 60 * 1000) { localStorage.setItem("ldh_autosync_ts", String(Date.now())); sync(); }
             }
         });
+        // AgentRouter 每日自动签到：打开 linux.do 即触发，每天一次，失败不记录当天(刷新可重跑)
+        setTimeout(function () { runArCheckin(false); }, 2500);
     }
     function initLoginPage() {
         function waitFor(sel, cb) { let el = document.querySelector(sel); if (el) return cb(el); let waited = 0; const iv = setInterval(function () { el = document.querySelector(sel); if (el) { clearInterval(iv); cb(el); } else if ((waited += 200) >= 12000) clearInterval(iv); }, 200); }
