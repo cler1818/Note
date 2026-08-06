@@ -1,0 +1,186 @@
+// ==UserScript==
+// @name         AgentRouter 助手（linux.do 面板 + 一键签到）
+// @namespace    https://agentrouter.org/
+// @version      3.0.0
+// @description  在 linux.do 显示悬浮面板：查看余额/历史消耗/令牌，并一键后台签到（纯代码，失败时用不激活后台标签兜底）
+// @match        https://linux.do/*
+// @match        https://connect.linux.do/oauth2/*
+// @match        https://agentrouter.org/*
+// @run-at       document-idle
+// @noframes
+// @grant        GM_xmlhttpRequest
+// @grant        GM_openInTab
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM_notification
+// @connect      agentrouter.org
+// @connect      connect.linux.do
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  const CLIENT_ID = 'KZUecGfhhDZMVnv8UtEdhOhf9sNOhqVX';
+  const AR = 'https://agentrouter.org';
+  const CONNECT = 'https://connect.linux.do';
+  const QPD_FALLBACK = 500000;      // 500000 额度 = $1
+  const FLOW_KEY = 'ar_tab_flow';
+  let USER_ID = 267679;             // 你的 user id（用作 New-API-User 头，登录后会自动更新）
+  const log = (...a) => console.log('%c[AR助手]', 'color:#16a34a;font-weight:bold', ...a);
+
+  // ============ 通用 GM 请求 ============
+  function gmFetch(url, { method = 'GET', headers = {} } = {}) {
+    return new Promise((resolve, reject) => {
+      const h = { 'New-API-User': String(USER_ID), ...headers };
+      GM_xmlhttpRequest({
+        method, url, headers: h, withCredentials: true, timeout: 20000,
+        onload: r => resolve(r),
+        onerror: () => reject(new Error('网络错误 ' + url)),
+        ontimeout: () => reject(new Error('超时 ' + url)),
+      });
+    });
+  }
+  async function gmJson(url, opts) {
+    const r = await gmFetch(url, opts);
+    let b; try { b = JSON.parse(r.responseText); }
+    catch { throw new Error('非JSON: ' + (r.responseText || '').slice(0, 80)); }
+    if (r.status >= 400 || b.success === false) throw new Error(b.message || ('HTTP ' + r.status));
+    return b;
+  }
+
+  // ============ 数据读取 ============
+  async function loadSelf() { const b = await gmJson(AR + '/api/user/self'); if (b.data?.id) USER_ID = b.data.id; return b.data; }
+  async function loadTokens() { const b = await gmJson(AR + '/api/token/?p=1&size=100'); return (b.data?.items || b.data || []); }
+  async function loadQPD() { try { const s = await gmJson(AR + '/api/status'); return s.data?.quota_per_unit || QPD_FALLBACK; } catch { return QPD_FALLBACK; } }
+
+  // ============ 纯代码签到 ============
+  function paramsFrom(u) { try { const x = new URL(u); const c = x.searchParams.get('code'), s = x.searchParams.get('state'); if (c && s) return { code: c, state: s }; } catch {} return null; }
+  function paramsFromText(t) { const c = (t || '').match(/[?&]code=([^&"'\s]+)/), s = (t || '').match(/[?&]state=([^&"'\s]+)/); return (c && s) ? { code: decodeURIComponent(c[1]), state: decodeURIComponent(s[1]) } : null; }
+  function parseApprove(html) {
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const links = [...doc.querySelectorAll('a[href^="/oauth2/approve/"]')];
+      const yes = links.find(a => (a.textContent || '').replace(/\s+/g, '') === '允许') || links[0];
+      return yes ? yes.getAttribute('href') : null;
+    } catch { const m = (html || '').match(/\/oauth2\/approve\/[A-Za-z0-9_\-]+/); return m ? m[0] : null; }
+  }
+  async function pureCodeCheckin(say) {
+    say('退出登录…');            await gmFetch(AR + '/api/user/logout').catch(() => {});
+    say('获取 OAuth state…');    const st = await gmJson(AR + '/api/oauth/state?mode=login'); const state = st.data;
+    if (!state) throw new Error('未拿到 state');
+    say('请求 linux.do 授权页…'); const a = await gmFetch(`${CONNECT}/oauth2/authorize?response_type=code&client_id=${CLIENT_ID}&state=${encodeURIComponent(state)}`);
+    const ap = parseApprove(a.responseText);
+    if (!ap) throw new Error('授权页无“允许”链接（可能 connect.linux.do 未带上登录态）');
+    say('点击“允许”…');          const ar = await gmFetch(CONNECT + (ap.startsWith('/') ? ap : '/' + ap));
+    const cs = paramsFrom(ar.finalUrl) || paramsFromText(ar.responseText);
+    if (cs) { say('回调登录…'); await gmFetch(`${AR}/api/oauth/linuxdo?aff=&code=${encodeURIComponent(cs.code)}&state=${encodeURIComponent(cs.state)}`).catch(() => {}); }
+    say('校验结果…');            const self = await loadSelf();
+    if (!self?.id) throw new Error('校验失败：仍未登录');
+    return self;
+  }
+
+  // ============ 兜底：不激活的后台标签 ============
+  function fallbackTab(say) {
+    return new Promise(resolve => {
+      GM_setValue(FLOW_KEY, { step: 'start', ts: Date.now() });
+      const tab = GM_openInTab(AR + '/console?ar_auto=1', { active: false, insert: true, setParent: true });
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const f = GM_getValue(FLOW_KEY, null);
+        if (f && f.step === 'done') { clearInterval(iv); GM_deleteValue(FLOW_KEY); try { tab.close(); } catch {} say('✅ 后台标签兜底完成'); resolve(); }
+        else if (Date.now() - t0 > 180000) { clearInterval(iv); GM_deleteValue(FLOW_KEY); try { tab.close(); } catch {} say('⚠️ 兜底超时，请手动检查'); resolve(); }
+      }, 1000);
+    });
+  }
+
+  async function doCheckin(say) {
+    try { const d = await pureCodeCheckin(say); say('✅ 纯代码签到完成'); return d; }
+    catch (e) { log('纯代码失败', e); say('纯代码失败（' + e.message + '），改用后台标签…'); await fallbackTab(say); return await loadSelf().catch(() => null); }
+  }
+
+  // ============ connect.linux.do：兜底时自动点“允许” ============
+  function initConnect() {
+    if (!GM_getValue(FLOW_KEY, null)) return;
+    if (location.pathname !== '/oauth2/authorize') return;
+    const tryClick = () => { const l = [...document.querySelectorAll('a[href^="/oauth2/approve/"]')].filter(a => (a.textContent || '').replace(/\s+/g, '') === '允许' && a.getClientRects().length); if (l.length) { l[0].click(); return true; } return false; };
+    if (tryClick()) return;
+    const ob = new MutationObserver(() => { if (tryClick()) ob.disconnect(); });
+    ob.observe(document.documentElement, { childList: true, subtree: true });
+    setTimeout(() => ob.disconnect(), 30000);
+  }
+
+  // ============ agentrouter：兜底时跑通用登录流程 ============
+  async function initAgentRouter() {
+    const f = GM_getValue(FLOW_KEY, null);
+    if (!f) return;                          // 正常使用 agentrouter 时不打扰
+    const loggedIn = !!localStorage.getItem('user');
+    if (f.step === 'authorizing' && loggedIn && location.pathname.startsWith('/console')) { GM_setValue(FLOW_KEY, { step: 'done', ts: Date.now() }); return; }
+    if (f.step === 'start') {
+      GM_setValue(FLOW_KEY, { step: 'authorizing', ts: Date.now() });
+      try {
+        await fetch('/api/user/logout', { credentials: 'include', cache: 'no-store' }).catch(() => {});
+        localStorage.removeItem('user');
+        const b = await (await fetch('/api/oauth/state?mode=login', { credentials: 'include', cache: 'no-store' })).json();
+        location.replace(`${CONNECT}/oauth2/authorize?response_type=code&client_id=${CLIENT_ID}&state=${encodeURIComponent(b.data)}`);
+      } catch (e) { GM_setValue(FLOW_KEY, { step: 'done', ts: Date.now(), error: String(e) }); }
+    }
+  }
+
+  // ============ linux.do：悬浮面板 ============
+  function el(tag, style, text) { const e = document.createElement(tag); if (style) Object.assign(e.style, style); if (text != null) e.textContent = text; return e; }
+  const money = (q, qpd) => '$' + (Number(q) / qpd).toFixed(2);
+  const ts = s => s > 0 ? new Date(s * 1000).toLocaleString() : '永不过期';
+
+  function initForum() {
+    const btn = el('button', { position: 'fixed', right: '18px', bottom: '18px', zIndex: 999999, width: '52px', height: '52px', borderRadius: '50%', background: '#16a34a', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 12px rgba(0,0,0,.3)' }, 'AR');
+    const panel = el('div', { position: 'fixed', right: '18px', bottom: '80px', zIndex: 999999, width: '380px', maxHeight: '72vh', overflow: 'auto', display: 'none', background: '#0f172a', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '12px', padding: '14px', font: '13px/1.5 system-ui', boxShadow: '0 8px 24px rgba(0,0,0,.4)' });
+    const sum = el('div', { marginBottom: '10px' }); const status = el('div', { margin: '8px 0', minHeight: '18px', color: '#93c5fd' }); const list = el('div');
+    const bCheck = el('button', { marginRight: '8px', padding: '7px 12px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }, '立即签到');
+    const bRefresh = el('button', { padding: '7px 12px', background: '#334155', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }, '刷新');
+    panel.append(el('div', { fontWeight: 'bold', fontSize: '15px', marginBottom: '8px' }, 'AgentRouter'), sum, el('div', { marginBottom: '8px' }, ''), bCheck, bRefresh, status, list);
+    panel.children[2].append(); document.body.append(btn, panel);
+    const say = t => { status.textContent = t; log(t); };
+
+    async function refresh() {
+      say('加载中…'); sum.textContent = ''; list.textContent = '';
+      try {
+        const qpd = await loadQPD(); const self = await loadSelf(); const tokens = await loadTokens();
+        sum.innerHTML = '';
+        sum.append(
+          el('div', null, `账号：${self.username}（${self.display_name || ''}）`),
+          el('div', { color: '#4ade80', fontSize: '15px', fontWeight: 'bold' }, `余额 ${money(self.quota, qpd)}`),
+          el('div', null, `历史消耗 ${money(self.used_quota, qpd)}　请求 ${self.request_count} 次`),
+          el('div', { color: self.checked_in ? '#4ade80' : '#fbbf24' }, `今日签到：${self.checked_in ? '已签到' : '未签到'}`),
+        );
+        list.append(el('div', { margin: '10px 0 6px', fontWeight: 'bold' }, `令牌（${tokens.length}）`));
+        tokens.forEach(t => {
+          const card = el('div', { border: '1px solid #334155', borderRadius: '8px', padding: '8px', marginBottom: '8px' });
+          const key = 'sk-' + t.key;
+          const keyRow = el('div', { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px' });
+          const keyBox = el('code', { flex: '1', wordBreak: 'break-all', background: '#1e293b', padding: '4px 6px', borderRadius: '6px', fontSize: '11px' }, key);
+          const copy = el('button', { padding: '3px 8px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px' }, '复制');
+          copy.onclick = () => { navigator.clipboard.writeText(key).then(() => { copy.textContent = '已复制'; setTimeout(() => copy.textContent = '复制', 1200); }); };
+          keyRow.append(keyBox, copy);
+          card.append(
+            el('div', { fontWeight: 'bold' }, t.name || '(未命名)'),
+            el('div', null, `剩余额度：${t.unlimited_quota ? '∞' : money(t.remain_quota, qpd)}　已用额度：${money(t.used_quota, qpd)}`),
+            el('div', { color: '#94a3b8' }, `创建时间：${ts(t.created_time)}`),
+            keyRow,
+          );
+          list.append(card);
+        });
+        say('');
+      } catch (e) { say('加载失败：' + e.message + '（先确认已在 agentrouter 登录）'); }
+    }
+
+    btn.onclick = () => { const open = panel.style.display === 'none'; panel.style.display = open ? 'block' : 'none'; if (open && !sum.textContent) refresh(); };
+    bRefresh.onclick = refresh;
+    bCheck.onclick = async () => { bCheck.disabled = true; await doCheckin(say); await refresh(); bCheck.disabled = false; };
+  }
+
+  // ============ 入口 ============
+  if (location.hostname === 'connect.linux.do') initConnect();
+  else if (location.hostname === 'agentrouter.org') initAgentRouter();
+  else if (location.hostname === 'linux.do') initForum();
+})();
