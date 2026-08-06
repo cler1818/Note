@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
-// @version      6.7.6
+// @version      6.7.7
 // @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。集成 AgentRouter 每日自动签到(纯代码) 与 AnyRouter 一键登录。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
@@ -158,12 +158,38 @@
     // AgentRouter(New-API) 后端强制校验 New-API-User 头，缺失会报"未提供 New-Api-User"
     let AR_UID = Number(gmGet(AR.UIDKEY, 0)) || 0;
     function setArUid(id) { id = Number(id) || 0; if (id > 0 && id !== AR_UID) { AR_UID = id; gmSet(AR.UIDKEY, id); } }
+    function arWait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function arResponseHeader(r, name) {
+        const m = String(r.responseHeaders || "").match(new RegExp("^" + name + ":\\s*(.+)$", "im"));
+        return m ? m[1].trim() : "";
+    }
+    function arBodyPreview(t) {
+        return String(t || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+            .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 100);
+    }
+    // 把"返回非JSON"细分成可判断的原因，否则验证页/登录页/网关错误全都长一个样
+    function arNonJsonError(r, url) {
+        const text = String(r.responseText || ""), status = Number(r.status) || 0;
+        const preview = arBodyPreview(text), finalUrl = String(r.finalUrl || url || "");
+        if (/just a moment|cf-chl|cloudflare|attention required|verify you are human/i.test(text)) {
+            const e = new Error("被验证页拦截"); e.cf = true; return e;
+        }
+        if (/bad gateway|service unavailable|gateway timeout|upstream/i.test(text) || [502, 503, 504].indexOf(status) >= 0) {
+            return new Error("AR服务临时异常(HTTP " + (status || "未知") + ")");
+        }
+        if (/\/login(?:\?|$)/.test(finalUrl) || /登\s*录|sign\s*in/i.test(preview)) {
+            return new Error("登录态失效，接口返回登录页");
+        }
+        return new Error("返回非JSON(HTTP " + (status || "未知") + "," + (arResponseHeader(r, "content-type") || "未知类型") + ")" + (preview ? ":" + preview : ""));
+    }
     function gmFetch(url, opts) {
         opts = opts || {};
         return new Promise(function (resolve, reject) {
             if (typeof GM_xmlhttpRequest !== "function") { reject(new Error("缺少跨域权限")); return; }
-            const h = {};
-            if (AR_UID > 0) h["New-API-User"] = String(AR_UID);
+            const h = { "Accept": "application/json, text/plain, */*" };
+            // New-API-User 只发给 agentrouter.org，不能泄露给 connect.linux.do
+            let host = ""; try { host = new URL(url).hostname; } catch (_) {}
+            if (host === "agentrouter.org" && opts.userHeader !== false && AR_UID > 0) h["New-API-User"] = String(AR_UID);
             const ex = opts.headers || {};
             Object.keys(ex).forEach(function (k) { h[k] = ex[k]; });
             GM_xmlhttpRequest({
@@ -177,9 +203,23 @@
     }
     async function gmJson(url, opts) {
         const r = await gmFetch(url, opts);
-        let b; try { b = JSON.parse(r.responseText); } catch (_) { throw new Error("返回非JSON"); }
+        const text = String(r.responseText || "").replace(/^﻿/, "").trim();
+        let b; try { b = JSON.parse(text); } catch (_) { throw arNonJsonError(r, url); }
         if (r.status >= 400 || b.success === false) throw new Error(b.message || ("HTTP " + r.status));
         return b;
+    }
+    // 只对网络类抖动重试；OAuth code 是一次性的，绝不重试回调
+    async function gmJsonRetry(url, opts, retries) {
+        let last; retries = Number(retries) || 0;
+        for (let i = 0; i <= retries; i++) {
+            try { return await gmJson(url, opts); }
+            catch (e) {
+                last = e;
+                if (i >= retries || !/网络错误|请求超时|临时异常|HTTP 429|HTTP 5\d\d/.test((e && e.message) || "")) throw e;
+                await arWait(500 * (i + 1));
+            }
+        }
+        throw last;
     }
 
     // ---- AgentRouter：纯代码 OAuth ----
@@ -197,52 +237,81 @@
         } catch (_) { const m = (html || "").match(/\/oauth2\/approve\/[A-Za-z0-9_\-]+/); return m ? m[0] : null; }
     }
     // withLogout=true 为每日签到（先退出再登录才会触发签到）；false 仅补登录态
-    // 后台静默开一次 agentrouter，让该站分支把 user.id 写进 GM 存储（你允许后台打开）
-    function arLearnUidViaTab() {
-        return new Promise(function (resolve) {
+    async function arOAuth(say, withLogout) {
+        if (withLogout) { say("退出登录…"); await gmFetch(AR.HOST + "/api/user/logout", { userHeader: true }).catch(function () {}); }
+        say("获取 state…");
+        const st = await gmJsonRetry(AR.HOST + "/api/oauth/state?mode=login", { userHeader: false }, 2);
+        const state = st.data;
+        if (!state) throw new Error("未拿到 state");
+        say("请求授权页…");
+        const a = await gmFetch(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(state), {
+            userHeader: false, headers: { "Accept": "text/html,application/xhtml+xml" }
+        });
+        if (a.status >= 400 || /just a moment|cf-chl|cloudflare|attention required/i.test(a.responseText || "")) throw arNonJsonError(a, a.finalUrl);
+        // 授权页可能已直接带回 code/state（此前已授权过），否则再点一次"允许"
+        let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
+        if (!cs) {
+            const ap = parseApprove(a.responseText);
+            if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
+            say("点击允许…");
+            const approved = await gmFetch(new URL(ap, CONNECT_HOST).href, {
+                userHeader: false, headers: { "Accept": "text/html,application/xhtml+xml" }
+            });
+            cs = paramsFrom(approved.finalUrl) || paramsFromText(approved.responseText);
+        }
+        if (!cs) throw new Error("授权完成但没返回code/state");
+        // 关键：签到结果只在这个回调里（data.checked_in），不能吞掉错误也不能重试(code一次性)
+        say("提交签到回调…");
+        const cb = await gmJson(AR.HOST + "/api/oauth/linuxdo?code=" + encodeURIComponent(cs.code) +
+            "&state=" + encodeURIComponent(cs.state) + "&mode=login", { userHeader: false });
+        if (!cb || !cb.data || !cb.data.id) throw new Error("回调成功但缺少用户信息");
+        setArUid(cb.data.id);             // 先拿到 UID，后续 self 请求才带得上头
+        say("读取账户…");
+        const self = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1);
+        if (!self || !self.data || !self.data.id) throw new Error("仍未登录");
+        setArUid(self.data.id);
+        // checked_in 只在 OAuth 回调里返回，/api/user/self 没有这个字段
+        return { user: self.data, checkedIn: cb.data.checked_in === true, source: "code" };
+    }
+
+    // 兜底：纯代码被验证页拦住时，后台静默走站点原生 OAuth（只后台，不切前台）
+    function arFallbackTab(say) {
+        return new Promise(function (resolve, reject) {
+            gmSet(AR.FLOW, { step: "start", ts: Date.now() });
             let handle = null;
-            try { handle = GM_openInTab(AR.HOST + "/console", { active: false, insert: true, setParent: true }); } catch (_) {}
-            if (!handle) { resolve(false); return; }
-            let n = 0;
+            try { handle = GM_openInTab(AR.HOST + "/login?ar_auto=1", { active: false, insert: true, setParent: true }); }
+            catch (e) { gmDel(AR.FLOW); reject(new Error("无法打开后台授权标签")); return; }
+            if (!handle) { gmDel(AR.FLOW); reject(new Error("无法打开后台授权标签")); return; }
+            say("后台授权兜底中…");
+            const started = Date.now();
             const iv = setInterval(function () {
-                n++;
-                const id = Number(gmGet(AR.UIDKEY, 0)) || 0;
-                if (id > 0) { AR_UID = id; clearInterval(iv); try { handle.close(); } catch (_) {} resolve(true); }
-                else if (n > 20) { clearInterval(iv); try { handle.close(); } catch (_) {} resolve(false); }
+                const flow = gmGet(AR.FLOW, null);
+                if (flow && flow.step === "done") {
+                    clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
+                    if (flow.error) reject(new Error(flow.error));
+                    else resolve({ checkedIn: flow.checkedIn === true, source: "tab" });
+                } else if (Date.now() - started > 3 * 60 * 1000) {
+                    // 超时一律关标签，绝不留在前台干扰你的自动按键
+                    clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
+                    reject(new Error("后台授权超时(可能需人工过验证)"));
+                }
             }, 700);
         });
     }
 
-    async function arOAuth(say, withLogout) {
-        if (withLogout) { say("退出登录…"); await gmFetch(AR.HOST + "/api/user/logout").catch(function () {}); }
-        say("获取 state…");
-        const st = await gmJson(AR.HOST + "/api/oauth/state?mode=login");
-        const state = st.data;
-        if (!state) throw new Error("未拿到 state");
-        say("请求授权页…");
-        const a = await gmFetch(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(state));
-        const ap = parseApprove(a.responseText);
-        if (!ap) throw new Error("授权页无允许链接");
-        say("点击允许…");
-        const ar = await gmFetch(CONNECT_HOST + (ap.charAt(0) === "/" ? ap : "/" + ap));
-        const cs = paramsFrom(ar.finalUrl) || paramsFromText(ar.responseText);
-        if (cs) { say("回调登录…"); await gmFetch(AR.HOST + "/api/oauth/linuxdo?aff=&code=" + encodeURIComponent(cs.code) + "&state=" + encodeURIComponent(cs.state)).catch(function () {}); }
-        say("校验…");
-        let self;
-        try {
-            self = await gmJson(AR.HOST + "/api/user/self");
-        } catch (e) {
-            // 首次运行且从未学到 UID 时，New-API 会拒绝请求；用后台标签兜底学一次再重试
-            if (!AR_UID && /New-Api-User|无权|未提供/i.test(e && e.message || "")) {
-                say("学习用户ID…");
-                await arLearnUidViaTab();
-                if (AR_UID) self = await gmJson(AR.HOST + "/api/user/self");
-                else throw new Error("无法获取用户ID，请先手动登录一次 agentrouter.org");
-            } else throw e;
+    async function arCheckin(say) {
+        try { return await arOAuth(say, true); }
+        catch (e) {
+            const msg = (e && e.message) || String(e);
+            say("纯代码失败:" + msg);
+            try {
+                const r = await arFallbackTab(say);
+                if (!r.user) { try { const s = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1); r.user = s && s.data; } catch (_) {} }
+                return r;
+            } catch (e2) {
+                throw new Error(msg + " / 兜底:" + ((e2 && e2.message) || e2));
+            }
         }
-        if (!self || !self.data || !self.data.id) throw new Error("仍未登录");
-        setArUid(self.data.id);          // 学习 UID，供后续请求带 New-API-User 头
-        return self.data;
     }
 
 
@@ -276,22 +345,40 @@
     if (location.hostname === "agentrouter.org") {
         // 只要本站已登录，就把 user.id 学下来，供 linux.do 侧请求带 New-API-User 头
         (function () { const u = getStoredUser(); if (u && u.id) setArUid(u.id); })();
-        const flow = gmGet(AR.FLOW, null);
+        let flow = gmGet(AR.FLOW, null);
+        if (flow && (!flow.ts || Date.now() - flow.ts > 3 * 60 * 1000)) { gmDel(AR.FLOW); flow = null; }
         if (flow) {
             // 兜底状态机（由 linux.do 侧发起）
             (async function () {
-                const loggedIn = !!getStoredUser();
-                if (flow.step === "authorizing" && loggedIn && location.pathname.indexOf("/console") === 0) {
-                    gmSet(AR.FLOW, { step: "done", ts: Date.now() }); return;
+                const stored = getStoredUser();
+                if (flow.step === "authorizing") {
+                    // AgentRouter 是单页应用，跳到 /console 未必重新加载页面，
+                    // 只检查一次会永远等不到完成 → 必须持续观察
+                    const finishIfReady = function () {
+                        const cur = getStoredUser();
+                        if (!cur || location.pathname.indexOf("/console") !== 0) return false;
+                        if (cur.id) setArUid(cur.id);
+                        gmSet(AR.FLOW, { step: "done", ts: Date.now(), checkedIn: cur.checked_in === true });
+                        return true;
+                    };
+                    if (!finishIfReady()) {
+                        const timer = setInterval(function () { if (finishIfReady()) clearInterval(timer); }, 250);
+                        setTimeout(function () { clearInterval(timer); }, 60000);
+                    }
+                    return;
                 }
                 if (flow.step === "start") {
                     gmSet(AR.FLOW, { step: "authorizing", ts: Date.now() });
                     try {
-                        await fetch("/api/user/logout", { credentials: "include", cache: "no-store" }).catch(function () {});
+                        const headers = stored && stored.id ? { "New-API-User": String(stored.id) } : {};
+                        await fetch("/api/user/logout", { credentials: "include", cache: "no-store", headers: headers }).catch(function () {});
                         localStorage.removeItem("user");
-                        const b = await (await fetch("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" })).json();
+                        const resp = await fetch("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" });
+                        const txt = await resp.text();
+                        let b; try { b = JSON.parse(txt); } catch (_) { throw new Error("页面流程返回非JSON(HTTP " + resp.status + ")"); }
+                        if (!resp.ok || b.success === false || !b.data) throw new Error(b.message || ("HTTP " + resp.status));
                         location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(b.data));
-                    } catch (e) { gmSet(AR.FLOW, { step: "done", ts: Date.now(), error: String(e) }); }
+                    } catch (e) { gmSet(AR.FLOW, { step: "done", ts: Date.now(), error: (e && e.message) || String(e) }); }
                 }
             })();
         } else if (isEntryPath()) {
@@ -440,12 +527,20 @@
         const today = todayStr();
         if (!force && gmGet(AR.DAYKEY, "") === today) { arState = "ok"; render(); return; }
         arState = "running"; arNote = ""; render();
-        arOAuth(function (s) { arNote = s; render(); }, true).then(function () {
-            gmSet(AR.DAYKEY, today); arState = "ok"; arNote = "✓今日已签到";
-            saveArNote("ok", arNote);
+        arCheckin(function (s) { arNote = s; render(); }).then(function (r) {
+            // 如实显示：checked_in 为准，登录成功不等于签到成功
+            if (r && r.checkedIn) {
+                gmSet(AR.DAYKEY, today);
+                arState = "ok"; arNote = "✓服务器确认签到成功";
+            } else {
+                gmSet(AR.DAYKEY, today);
+                arState = "ok"; arNote = "已登录，今日无新奖励(可能已签到)";
+            }
+            saveArNote(arState, arNote);
             render();
         }).catch(function (e) {
-            arState = "fail"; arNote = "AR失败:" + (e && e.message || e);
+            // 失败不写 DAYKEY，刷新页面即可重跑
+            arState = "fail"; arNote = "AR失败:" + ((e && e.message) || e);
             saveArNote("fail", arNote);
             render();
         });
@@ -857,14 +952,6 @@
         }
         const sy = document.getElementById("ldh_sync");
         if (sy) { const failed = (syncState === "cf" || syncState === "err" || syncState === "empty" || syncState === "login" || syncState === "nogrant" || syncState === "otheruser" || syncState === "popupblock"); const hasData = !!readTL3(); sy.textContent = (syncState === "syncing" || syncState === "opening") ? "同步中…" : (failed && !hasData) ? "⟳重试" : (syncState === "ok" || hasData) ? "✓已同步" : "⟳同步"; sy.style.color = (failed && !hasData) ? "#ff8a8a" : "#8fe0b0"; }
-        // Agent 按钮：灰=未签到 黄=签到中 绿=已签到 红=失败(可点重试)
-        const ab = document.getElementById("ldh_ar");
-        if (ab) {
-            if (arState === "running") { ab.textContent = "Agent…"; ab.style.background = "#a07d2a"; }
-            else if (arState === "ok") { ab.textContent = "✓Agent"; ab.style.background = "#2f6f3e"; }
-            else if (arState === "fail") { ab.textContent = "Agent!"; ab.style.background = "#8a3a3a"; }
-            else { ab.textContent = "Agent"; ab.style.background = "#666"; }
-        }
         const nb = document.getElementById("ldh_any");
         if (nb) { nb.style.background = anyState === "running" ? "#a07d2a" : "#666"; }
     }
@@ -909,38 +996,56 @@
         }
     }
     function toggleMin() { manualMin = !manualMin; try { sessionStorage.setItem("ldh_min", manualMin ? "1" : "0"); } catch (_) {} applyMin(); }
-    function savePos(p) { try { sessionStorage.setItem("ldh_pos", JSON.stringify({ left: p.style.left, top: p.style.top })); } catch (_) {} }
+    function savePos(p) { try { sessionStorage.setItem("ldh_pos", JSON.stringify({ left: p.style.left, bottom: p.style.bottom })); } catch (_) {} }
     function restorePos(p) {
         try {
             const q = JSON.parse(sessionStorage.getItem("ldh_pos") || "null");
-            if (!q || !q.left || !q.top) return;
+            if (!q || !q.left || !q.bottom) return;
             // 越界校验：还原小窗后旧坐标可能落在视口外，会导致面板"消失"
-            const L = parseFloat(q.left), Tp = parseFloat(q.top);
-            if (!isFinite(L) || !isFinite(Tp) ||
-                L < 0 || Tp < 0 ||
-                L > window.innerWidth - 60 || Tp > window.innerHeight - 24) {
+            const L = parseFloat(q.left), B = parseFloat(q.bottom);
+            if (!isFinite(L) || !isFinite(B) ||
+                L < 0 || B < 0 ||
+                L > window.innerWidth - 60 || B > window.innerHeight - 24) {
                 resetPos(p); return;
             }
-            p.style.left = q.left; p.style.top = q.top; p.style.bottom = "auto";
+            p.style.left = q.left; p.style.bottom = q.bottom; p.style.top = "auto";
         } catch (_) { resetPos(p); }
     }
     function enableDrag(p, handle) {
-        let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        // 关键：面板是 transform-origin:bottom left + scale(0.9)。
+        // 若把定位从 bottom 切成 top，缩放收缩方向会翻转，面板会瞬间下移约 10% 高度。
+        // 所以全程只改 left/bottom，绝不写 top/bottom:auto；且移动超过阈值才算拖拽，
+        // 单纯点一下标题栏不做任何事。
+        let armed = false, dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        const THRESH = 3;
         handle.addEventListener("mousedown", function (e) {
-            // 标题栏里的任何可点元素都不该触发拖拽（否则 bottom→auto 会让面板整体下移）
             if (e.target.closest("button") || e.target.closest("a")) return;
             if (e.target.closest("#ldh_sync") || e.target.closest("#ldh_min")) return;
             if (e.button !== 0) return;
-            const r = p.getBoundingClientRect(); ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY; dragging = true;
-            p.style.left = ox + "px"; p.style.top = oy + "px"; p.style.bottom = "auto"; e.preventDefault();
+            const r = p.getBoundingClientRect();
+            ox = r.left;
+            oy = window.innerHeight - r.bottom;      // 记录当前 bottom 距离
+            sx = e.clientX; sy = e.clientY;
+            armed = true; dragging = false;
         });
         document.addEventListener("mousemove", function (e) {
-            if (!dragging) return;
-            let nx = ox + (e.clientX - sx), ny = oy + (e.clientY - sy);
-            nx = Math.max(0, Math.min(window.innerWidth - 60, nx)); ny = Math.max(0, Math.min(window.innerHeight - 24, ny));
-            p.style.left = nx + "px"; p.style.top = ny + "px";
+            if (!armed) return;
+            const dx = e.clientX - sx, dy = e.clientY - sy;
+            if (!dragging) {
+                if (Math.abs(dx) < THRESH && Math.abs(dy) < THRESH) return;   // 还没到阈值：当作单击
+                dragging = true;
+            }
+            let nx = ox + dx;
+            let nb = oy - dy;                        // 鼠标下移 → bottom 变小
+            nx = Math.max(0, Math.min(window.innerWidth - 60, nx));
+            nb = Math.max(0, Math.min(window.innerHeight - 24, nb));
+            p.style.left = nx + "px";
+            p.style.bottom = nb + "px";              // 始终锚定底部，基点不变
         });
-        document.addEventListener("mouseup", function () { if (dragging) { dragging = false; savePos(p); } });
+        document.addEventListener("mouseup", function () {
+            if (armed && dragging) savePos(p);
+            armed = false; dragging = false;
+        });
     }
     function composerOpen() {
         const root = document.querySelector("#reply-control");
@@ -964,7 +1069,6 @@
             '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;min-height:22px;padding:6px 0 3px 0;line-height:1.6;overflow:visible;">' +
             '<span style="font-weight:bold;">⚡ LINUX DO 助手</span>' +
             '<span style="display:flex;align-items:center;">' +
-            '<button id="ldh_ar" style="' + smallBtnCss + 'background:#666;color:#fff;" title="Agent">Agent</button>' +
             '<button id="ldh_any" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AnyRouter">Any</button>' +
             '<span id="ldh_sync" style="cursor:pointer;font-size:10px;color:#8fe0b0;margin-left:6px;">⟳同步</span>' +
             '<span id="ldh_min" style="cursor:pointer;margin-left:6px;font-size:13px;color:#ccc;">－</span>' +
@@ -985,7 +1089,6 @@
         MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
         document.getElementById("ldh_sync").addEventListener("click", function () { sync(); });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
-        document.getElementById("ldh_ar").addEventListener("click", function () { runArCheckin(true); });
         document.getElementById("ldh_any").addEventListener("click", function () { anyState = "running"; render(); anyOpenTab(); setTimeout(function () { anyState = "idle"; render(); }, 3000); });
         enableDrag(p, document.getElementById("ldh_title"));
         restorePos(p);
