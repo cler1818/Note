@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手（日常维护 / 快速升级 · 含等级3进度）
 // @namespace    http://tampermonkey.net/
-// @version      6.7.8
+// @version      6.7.9
 // @description  三个按钮：日常维护(3分钟)、快速升级(10分钟)、日常挂机(500分钟)。点赞与刷帖交错、匀速铺满整个运行时长，全程不空转；每次上传间隔在配置区间内真随机(默认0-60秒)，保证被计入阅读时长。正计时。面板4行固定。等级3进度：后台自动跨域抓 connect(不用打开网页)+定时刷新+手动同步，按当前登录用户分开存(多账号各看各的)。集成 AgentRouter 每日自动签到(纯代码) 与 AnyRouter 一键登录。按实测规律避开~200次/窗口的24h硬封（日常挂机不受该限制）。
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
@@ -271,8 +271,7 @@
         if (!self || !self.data || !self.data.id) throw new Error("仍未登录");
         setArUid(self.data.id);
         // checked_in 只在 OAuth 回调里返回，/api/user/self 没有这个字段
-        return { user: self.data, checkedIn: cb.data.checked_in === true, source: "code" };
-    }
+        return { user: self.data, checkedIn: cb.data.checked_in === true, source: "code" };    }
 
     // 兜底：纯代码被验证页拦住时，后台静默走站点原生 OAuth（只后台，不切前台）
     function arFallbackTab(say) {
@@ -297,6 +296,28 @@
                 }
             }, 700);
         });
+    }
+
+    // ---- 余额查询：quota / quota_per_unit = 美元 ----
+    // quota_per_unit 取不到时用 500000 兜底（500000 额度 = $1，与 AgentRouter 默认一致）
+    const AR_QPD_FALLBACK = 500000;
+    async function arBalance(userData) {
+        try {
+            let u = userData;
+            // 兜底流程(source:"tab")拿不到 user，这里补查一次
+            if (!u || typeof u.quota === "undefined") {
+                const s = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1);
+                u = s && s.data;
+            }
+            if (!u || typeof u.quota === "undefined") return "";
+            let qpd = AR_QPD_FALLBACK;
+            try {
+                const st = await gmJson(AR.HOST + "/api/status", { userHeader: false });
+                qpd = (st && st.data && Number(st.data.quota_per_unit)) || AR_QPD_FALLBACK;
+            } catch (_) {}
+            if (!(qpd > 0)) qpd = AR_QPD_FALLBACK;
+            return "$" + (Number(u.quota) / qpd).toFixed(2);
+        } catch (_) { return ""; }   // 查不到就不显示，绝不影响签到结果
     }
 
     async function arCheckin(say) {
@@ -343,6 +364,57 @@
 
     // ================= agentrouter.org 分支 =================
     if (location.hostname === "agentrouter.org") {
+        /* ---- 空白页自愈（v6.7.9）----
+         * 现象：AgentRouter 发版切换的极短窗口内，个别 JS 分包请求失败(404/中断)；
+         *       Chrome 会把这次"失败"连同响应一起写进 HTTP 磁盘缓存。此后每次打开，
+         *       浏览器都直接复用这条失败缓存，不再回源 → React 起不来 → #root 永远为空 → 整页空白。
+         *       此时服务器上文件其实是好的(实测 HTTP 200)，页面骨架也正常，无 WAF/CF 拦截。
+         * 处置：检测到「#root 为空」且「有分包 encodedBodySize===0」→
+         *       对失效分包发 fetch(cache:"reload") 强制回源改写缓存，再 reload 让页面用上新副本。
+         *       注：location.reload(true) 的 true 参数早已被浏览器忽略，单纯 reload 无法绕过磁盘缓存，
+         *       必须先用 cache:"reload" 把缓存条目替换掉，这一步实测有效。
+         *       用 sessionStorage 打标记，每个标签页只自愈一次，绝不无限刷新。
+         */
+        (function selfHealBlankPage() {
+            const KEY = "ldh_ar_healed";
+            function rootEmpty() {
+                const r = document.getElementById("root");
+                return !r || r.innerHTML.length === 0;
+            }
+            // 加载失败的分包在 resource timing 里表现为 encodedBodySize === 0
+            // （成功的分包哪怕命中磁盘缓存，encodedBodySize 也是真实体积）
+            function deadAssets() {
+                try {
+                    return performance.getEntriesByType("resource")
+                        .filter(function (e) { return /\/assets\/.*\.js(\?|$)/.test(e.name) && e.encodedBodySize === 0; })
+                        .map(function (e) { return e.name; });
+                } catch (_) { return []; }
+            }
+            function check() {
+                if (!rootEmpty()) {                          // 渲染正常：清标记，下次还能再自愈
+                    try { sessionStorage.removeItem(KEY); } catch (_) {}
+                    return true;
+                }
+                if (sessionStorage.getItem(KEY) === "1") {   // 已自愈过仍空白 → 停手，交人工
+                    console.warn("[LDH] AgentRouter 仍空白，已自动修复过一次，请手动 Ctrl+Shift+R");
+                    return true;
+                }
+                const dead = deadAssets();
+                if (!dead.length) return false;              // 可能只是还没渲染完，继续等
+                try { sessionStorage.setItem(KEY, "1"); } catch (_) {}
+                console.warn("[LDH] 检测到 " + dead.length + " 个分包缓存损坏且页面空白，正在强制回源修复…");
+                // 关键：cache:"reload" 会绕过并改写 HTTP 缓存里的坏条目
+                Promise.all(dead.map(function (u) {
+                    return fetch(u, { cache: "reload" }).catch(function () { return 0; });
+                })).then(function () { location.reload(); })
+                  .catch(function () { location.reload(); });
+                return true;
+            }
+            // 给 SPA 留渲染时间：10 秒内每秒查一次，一旦渲染出来立即停
+            let n = 0;
+            const iv = setInterval(function () { n++; if (check() || n >= 10) clearInterval(iv); }, 1000);
+        })();
+
         // 只要本站已登录，就把 user.id 学下来，供 linux.do 侧请求带 New-API-User 头
         (function () { const u = getStoredUser(); if (u && u.id) setArUid(u.id); })();
         let flow = gmGet(AR.FLOW, null);
@@ -538,6 +610,14 @@
             }
             saveArNote(arState, arNote);
             render();
+            // 余额异步补显示：查得到就追加，查不到保持原文案不变
+            arBalance(r && r.user).then(function (bal) {
+                if (!bal) return;
+                if (arState !== "ok") return;              // 期间被新流程改写就不覆盖
+                arNote += " · 余额 " + bal;
+                saveArNote(arState, arNote);
+                render();
+            });
         }).catch(function (e) {
             // 失败不写 DAYKEY，刷新页面即可重跑
             arState = "fail"; arNote = "AR失败:" + ((e && e.message) || e);
@@ -1069,7 +1149,7 @@
     function createUI() {
         if (document.getElementById("ldh_panel")) return;
         const p = document.createElement("div"); p.id = "ldh_panel";
-        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:2px 12px 10px 12px;border-radius:10px;width:252px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4);transform:scale(0.9);transform-origin:bottom left;overflow:visible;";
+        p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;padding:2px 12px 10px 12px;border-radius:10px;width:270px;font-size:11px;line-height:16px;box-shadow:0 6px 16px rgba(0,0,0,0.4);transform:scale(0.9);transform-origin:bottom left;overflow:visible;";
         const rowCss = "white-space:nowrap;overflow:hidden;min-height:15px;";
         const btnCss = "flex:1;padding:9px 2px;border:none;border-radius:7px;color:#fff;cursor:pointer;font-size:12px;white-space:nowrap;";
         const smallBtnCss = "padding:3px 6px;border:none;border-radius:4px;cursor:pointer;font-size:10px;margin-left:4px;";
