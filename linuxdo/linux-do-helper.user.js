@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @version      1.0.3
 // @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -224,8 +224,22 @@
     /* ============================================================
      * 跨域请求工具（GM）
      * ============================================================ */
-    let AR_UID = Number(gmGet(AR.UIDKEY, 0)) || 0;
-    function setArUid(id) { id = Number(id) || 0; if (id > 0 && id !== AR_UID) { AR_UID = id; gmSet(AR.UIDKEY, id); } }
+    /* AgentRouter 的 New-API-User 头 —— 必须每次从 GM 存储现读，不能缓存在内存里。
+     * 原因：兜底流程是在【另一个标签页】(agentrouter.org) 里完成登录并写入 UID 的，
+     * 论坛这边的脚本早就启动了，内存变量停留在启动那一刻的旧值(通常是 0)，
+     * 于是请求不带这个头 → 服务器回「未提供 New-Api-User」。
+     * 刷新论坛后脚本重启、重新读到 UID 就好了 —— 这正是"刷新一下立马就好"的真正原因。 */
+    function arUid() { return Number(gmGet(AR.UIDKEY, 0)) || 0; }
+    function setArUid(id) { id = Number(id) || 0; if (id > 0 && id !== arUid()) gmSet(AR.UIDKEY, id); }
+    // 兜底标签页登录完成后，UID 的写入和本页读取之间有几百毫秒空档，这里等它出现
+    async function waitArUid(maxMs) {
+        const t0 = Date.now();
+        while (Date.now() - t0 < (maxMs || 3000)) {
+            if (arUid() > 0) return arUid();
+            await arWait(200);
+        }
+        return arUid();
+    }
     function arWait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
     function arResponseHeader(r, name) {
         const m = String(r.responseHeaders || "").match(new RegExp("^" + name + ":\\s*(.+)$", "im"));
@@ -257,7 +271,10 @@
             const h = { "Accept": "application/json, text/plain, */*" };
             // New-API-User 只发给 agentrouter.org，不能泄露给别的站点
             let host = ""; try { host = new URL(url).hostname; } catch (_) {}
-            if (host === "agentrouter.org" && opts.userHeader !== false && AR_UID > 0) h["New-API-User"] = String(AR_UID);
+            if (host === "agentrouter.org" && opts.userHeader !== false) {
+                const uid = arUid();                 // 现读，别用启动时的旧值
+                if (uid > 0) h["New-API-User"] = String(uid);
+            }
             const ex = opts.headers || {};
             Object.keys(ex).forEach(function (k) { h[k] = ex[k]; });
             GM_xmlhttpRequest({
@@ -465,6 +482,9 @@
         let u = userData, lastErr = null;
         // userData 来自 OAuth 回调时可能已经带 quota，省一次请求
         if (!u || typeof u.quota === "undefined") {
+            // 没有 UID 就必然被拒（「未提供 New-Api-User」），先等一会儿看它写进来没有
+            if (arUid() <= 0) await waitArUid(3000);
+            if (arUid() <= 0) throw new Error("尚未取得 AgentRouter 账号ID，点击重试");
             for (let i = 0; i <= retries; i++) {
                 try {
                     const s = await gmJson(AR.HOST + "/api/user/self", { userHeader: true });
@@ -495,7 +515,13 @@
             if (!manualTrigger && !acquireTabLock()) throw new Error(msg + " / 另一个标签正在授权");
             try {
                 const r = await arFallbackTab(say);
-                if (!r.user) { try { const s = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1); r.user = s && s.data; } catch (_) {} }
+                /* 兜底标签页里的脚本刚把 UID 写进 GM 存储，这边要等它可读再查账户，
+                 * 否则请求不带 New-API-User 头，服务器直接回「未提供 New-Api-User」。 */
+                say("等待账号ID…");
+                await waitArUid(3000);
+                if (!r.user) {
+                    try { const s = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1); r.user = s && s.data; } catch (_) {}
+                }
                 return r;
             } catch (e2) {
                 throw new Error(msg + " / 兜底:" + ((e2 && e2.message) || e2));
@@ -585,10 +611,15 @@
             (async function () {
                 const stored = getStoredUser();
                 if (flow.step === "authorizing") {
+                    /* 判定登录完成：只要 localStorage 里有了 user.id 就算成功。
+                     * 不再强求落点是 /console —— AgentRouter 登录后的落点会变
+                     * (实测有 /console/token)，写死路径会让流程永远等不到。
+                     * 必须先写 UID 再标 done：论坛那边收到 done 后立刻要用这个 ID
+                     * 去查余额，顺序反了就会拿到「未提供 New-Api-User」。 */
                     const finishIfReady = function () {
                         const cur = getStoredUser();
-                        if (!cur || location.pathname.indexOf("/console") !== 0) return false;
-                        if (cur.id) setArUid(cur.id);
+                        if (!cur || !cur.id) return false;
+                        setArUid(cur.id);
                         gmSet(AR.FLOW, { step: "done", ts: Date.now(), checkedIn: cur.checked_in === true });
                         return true;
                     };
