@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.2
 // @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -105,6 +105,7 @@
      * ============================================================ */
     const CONNECT_HOST = "https://connect.linux.do";
     const AUTO_LOGIN_COOLDOWN = 10 * 60 * 1000;   // 主动访问自动登录：10分钟内不重复
+    const SYNC_THROTTLE_MS = 10 * 60 * 1000;      // 等级进度/摘要：跨标签 10 分钟内不重复拉取
 
     const AR = {
         HOST: "https://agentrouter.org",
@@ -113,9 +114,12 @@
         DAYKEY: "ar_last_ok_day",     // 当天签到成功的日期戳（本地日期字符串）
         NOTEKEY: "ar_checkin_note",   // 当天签到状态（按日期存储）
         UIDKEY: "ar_user_id",         // New-API-User 头所需的用户ID
-        BALKEY: "ar_balance",         // 余额缓存(全局，单账号)：签到成功后写入，重开页面直接显示
+        BALKEY: "ar_balance",         // 余额缓存(全局，单账号)
+        BALDAY: "ar_balance_day",     // 余额成功获取的日期戳 —— 和签到分开记，
+                                      // 这样"签到成功但余额没读到"时，下次只补查余额、不重复签到
         AUTOKEY: "ar_auto_login_ts",  // 主动访问自动登录的节流时间戳
-        SIDEKEY: "ar_side_login_v1"   // 别的标签页手动登录后回写余额，供论坛面板读取
+        SIDEKEY: "ar_side_login_v1",  // 别的标签页手动登录后回写余额，供论坛面板读取
+        TAB_TIMEOUT: 30 * 1000        // 前台标签兜底的超时
     };
     const ANY = {
         HOST: "https://anyrouter.top",
@@ -128,13 +132,21 @@
     const CREDIT = {
         HOST: "https://credit.linux.do",
         CLIENT_ID: "EQepJmrayDhYMykHHouVF9mgcBwdoXcy",
+        REDIRECT: "https://credit.linux.do/login",
+        SCOPE: "openid profile email",
         BALPREFIX: "credit_bal_",     // + 规范化后的 LD 用户名 → {v, at, day}
-        TRYPREFIX: "credit_try_",     // + 用户名 → {day, n}  每天后台自动登录次数
-        FLOW: "credit_login_flow_v1",
         API_TIMEOUT: 8000,            // 直接读余额的超时
-        LOGIN_TIMEOUT: 90 * 1000,     // 后台完整 OAuth 登录的超时
-        MAX_TRY_PER_DAY: 2            // 每天最多自动开几次后台登录标签
+        TAB_TIMEOUT: 30 * 1000        // 前台标签兜底的超时（拿到数据就提前关）
     };
+    // 前台标签互斥锁：多个论坛标签同时失败时，只让一个去开标签，避免同时弹一堆
+    const TABLOCK_KEY = "ldh_fg_tab_lock";
+    const TABLOCK_TTL = 40 * 1000;    // 略大于 TAB_TIMEOUT，持锁者异常退出后自动过期
+    function acquireTabLock() {
+        const now = Date.now(), cur = Number(gmGet(TABLOCK_KEY, 0)) || 0;
+        if (now - cur < TABLOCK_TTL) return false;
+        gmSet(TABLOCK_KEY, now); return true;
+    }
+    function releaseTabLock() { gmDel(TABLOCK_KEY); }
 
     /* ---- OAuth client_id 白名单 ----
      * 只对下面三个已确认的应用自动点「允许」。绝不放开成"所有应用"：
@@ -411,15 +423,18 @@
         setArUid(self.data.id);
         return { user: self.data, checkedIn: cb.data.checked_in === true, source: "code" };
     }
-    // 兜底：纯代码被验证页拦住时，后台静默走站点原生 OAuth（只后台，不切前台）
+    /* 兜底：纯代码被 Cloudflare 验证页拦住时，开【前台】标签走站点原生 OAuth。
+     * 用前台不用后台，是因为后台标签被 Chrome 节流后 React 应用起不来，
+     * 流程永远走不完 —— 这也是"后台总失败、一激活标签就成功"的原因。
+     * 拿到结果立刻关标签，最长 30 秒。 */
     function arFallbackTab(say) {
         return new Promise(function (resolve, reject) {
             gmSet(AR.FLOW, { step: "start", ts: Date.now() });
             let handle = null;
-            try { handle = GM_openInTab(AR.HOST + "/login?ar_auto=1", { active: false, insert: true, setParent: true }); }
-            catch (e) { gmDel(AR.FLOW); reject(new Error("无法打开后台授权标签")); return; }
-            if (!handle) { gmDel(AR.FLOW); reject(new Error("无法打开后台授权标签")); return; }
-            say("后台授权兜底中…");
+            try { handle = GM_openInTab(AR.HOST + "/login?ar_auto=1", { active: true, insert: true, setParent: true }); }
+            catch (e) { gmDel(AR.FLOW); reject(new Error("无法打开授权标签")); return; }
+            if (!handle) { gmDel(AR.FLOW); reject(new Error("无法打开授权标签")); return; }
+            say("标签授权兜底中…");
             const started = Date.now();
             const iv = setInterval(function () {
                 const flow = gmGet(AR.FLOW, null);
@@ -427,43 +442,65 @@
                     clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
                     if (flow.error) reject(new Error(flow.error));
                     else resolve({ checkedIn: flow.checkedIn === true, source: "tab" });
-                } else if (Date.now() - started > 3 * 60 * 1000) {
+                } else if (Date.now() - started > AR.TAB_TIMEOUT) {
                     clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
-                    reject(new Error("后台授权超时(可能需人工过验证)"));
+                    reject(new Error("授权超时(可能需人工过验证)"));
                 }
             }, 700);
         });
     }
-    // ---- 余额查询：quota / quota_per_unit = 美元 ----
+    /* ---- 余额查询：quota / quota_per_unit = 美元 ----
+     * 关键时序问题：GM_xmlhttpRequest 完成 OAuth 回调后，服务器返回的 Set-Cookie
+     * 写进浏览器 Cookie jar 需要一点时间。回调一返回就立刻查余额，请求往往还没带上
+     * 新 Cookie，服务器直接回 401 —— 这就是"签到成功但余额读取失败、刷新一下又好了"的原因。
+     * 所以这里：先等一会儿让 Cookie 落地，再查；失败了按 1s/2s/3s 递增重试。
+     * 另外绝不再把错误吞成空字符串 —— 真实原因要能显示到面板 tooltip 上。 */
     const AR_QPD_FALLBACK = 500000;
-    async function arBalance(userData) {
-        try {
-            let u = userData;
-            if (!u || typeof u.quota === "undefined") {
-                const s = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1);
-                u = s && s.data;
+    async function arBalance(userData, opts) {
+        opts = opts || {};
+        const waitFirst = opts.waitFirst || 0;      // 首次查询前的等待（刚跑完 OAuth 时用）
+        const retries = opts.retries === undefined ? 3 : opts.retries;
+        if (waitFirst > 0) await arWait(waitFirst);
+
+        let u = userData, lastErr = null;
+        // userData 来自 OAuth 回调时可能已经带 quota，省一次请求
+        if (!u || typeof u.quota === "undefined") {
+            for (let i = 0; i <= retries; i++) {
+                try {
+                    const s = await gmJson(AR.HOST + "/api/user/self", { userHeader: true });
+                    u = s && s.data;
+                    if (u && typeof u.quota !== "undefined") { lastErr = null; break; }
+                    lastErr = new Error("返回里没有 quota 字段");
+                } catch (e) { lastErr = e; }
+                if (i < retries) await arWait(1000 * (i + 1));   // 1s → 2s → 3s
             }
-            if (!u || typeof u.quota === "undefined") return "";
-            let qpd = AR_QPD_FALLBACK;
-            try {
-                const st = await gmJson(AR.HOST + "/api/status", { userHeader: false });
-                qpd = (st && st.data && Number(st.data.quota_per_unit)) || AR_QPD_FALLBACK;
-            } catch (_) {}
-            if (!(qpd > 0)) qpd = AR_QPD_FALLBACK;
-            return "$" + (Number(u.quota) / qpd).toFixed(2);
-        } catch (_) { return ""; }
+        }
+        if (!u || typeof u.quota === "undefined") {
+            throw lastErr || new Error("读不到账户额度");
+        }
+        let qpd = AR_QPD_FALLBACK;
+        try {
+            const st = await gmJson(AR.HOST + "/api/status", { userHeader: false });
+            qpd = (st && st.data && Number(st.data.quota_per_unit)) || AR_QPD_FALLBACK;
+        } catch (_) {}                                // 汇率取不到用默认值，不影响主流程
+        if (!(qpd > 0)) qpd = AR_QPD_FALLBACK;
+        return "$" + (Number(u.quota) / qpd).toFixed(2);
     }
-    async function arCheckin(say) {
+    async function arCheckin(say, manualTrigger) {
         try { return await arOAuth(say, true); }
         catch (e) {
             const msg = (e && e.message) || String(e);
             say("纯代码失败:" + msg);
+            // 前台标签会抢焦点，同一时刻只允许一个标签开（手动触发不受限）
+            if (!manualTrigger && !acquireTabLock()) throw new Error(msg + " / 另一个标签正在授权");
             try {
                 const r = await arFallbackTab(say);
                 if (!r.user) { try { const s = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1); r.user = s && s.data; } catch (_) {} }
                 return r;
             } catch (e2) {
                 throw new Error(msg + " / 兜底:" + ((e2 && e2.message) || e2));
+            } finally {
+                if (!manualTrigger) releaseTabLock();
             }
         }
     }
@@ -589,8 +626,19 @@
                 } catch (_) {}
             })();
         } else {
-            // 其它页面（如 /console）：已登录就把余额回写给面板
-            setTimeout(function () { siteLoggedIn().then(function (ok) { if (ok) arReportSideBalance(); }); }, 1200);
+            /* 其它页面（/console、/console/token…）：已登录就把余额回写给论坛面板。
+             * AgentRouter 是单页应用，路由切换不会重新执行脚本，而你登录后落点未必是
+             * 首页 —— 所以这里多探几次，只要哪一次检测到登录态就回写，然后停手。 */
+            (function () {
+                let n = 0;
+                const iv = setInterval(function () {
+                    n++;
+                    siteLoggedIn().then(function (ok) {
+                        if (ok) { clearInterval(iv); arReportSideBalance(); }
+                        else if (n >= 6) clearInterval(iv);
+                    });
+                }, 2000);
+            })();
         }
         return;
     }
@@ -682,7 +730,7 @@
             function stop() { if (stopped) return; stopped = true; try { ob.disconnect(); } catch (_) {} clearInterval(iv); }
             function step() {
                 if (stopped) return;
-                if (Date.now() - started > CREDIT.LOGIN_TIMEOUT) { stop(); return; }
+                if (Date.now() - started > CREDIT.TAB_TIMEOUT) { stop(); return; }
                 // 已经拿到 code（OAuth 回调中）→ 交给站点自己处理，绝不能再点登录
                 if (new URLSearchParams(location.search).has("code")) { stop(); return; }
                 // 已经进 /home 说明登录完成
@@ -788,7 +836,7 @@
     let anyState = "idle";
     let me = { username: "", trustLevel: null };
     let summary = null, summaryState = "idle";     // TL0/1 的摘要统计
-    let ldc = { state: "idle", value: "", cached: false, msg: "" };
+    let ldc = { state: "idle", value: "", msg: "" };
 
     let plan = { topics: 0, replies: 0, likes: 0 };
     const sent = { topics: 0, replies: 0, likes: 0, timingReq: 0 };
@@ -818,7 +866,6 @@
      * Credit 积分（Q6=a / Q7=90s / Q15 / Q11）
      * ============================================================ */
     function creditBalKey(u) { return CREDIT.BALPREFIX + (normUser(u) || "unknown"); }
-    function creditTryKey(u) { return CREDIT.TRYPREFIX + (normUser(u) || "unknown"); }
     function readCreditCache(u) {
         try {
             const v = JSON.parse(gmGet(creditBalKey(u), "null"));
@@ -827,12 +874,7 @@
         return null;
     }
     function writeCreditCache(u, val) { gmSet(creditBalKey(u), JSON.stringify({ v: val, at: Date.now(), day: todayStr() })); }
-    function creditTryCount(u) {
-        try { const v = JSON.parse(gmGet(creditTryKey(u), "null")); if (v && v.day === todayStr()) return Number(v.n) || 0; } catch (_) {}
-        return 0;
-    }
-    function bumpCreditTry(u) { gmSet(creditTryKey(u), JSON.stringify({ day: todayStr(), n: creditTryCount(u) + 1 })); }
-    // B2：toFixed(2) 后去掉尾随 0 → 1215.90 → 1215.9；1200.00 → 1200
+    // toFixed(2) 后去掉尾随 0 → 1215.90 → 1215.9；1200.00 → 1200
     function fmtLdc(n) {
         const v = Number(n);
         if (!isFinite(v)) return "";
@@ -853,69 +895,119 @@
         if (!d || d.available_balance === undefined || d.available_balance === null) throw new Error("缺少 available_balance");
         return { username: normUser(d.username), id: Number(d.id) || 0, balance: fmtLdc(d.available_balance) };
     }
-    // 后台完整 OAuth 登录：开一个后台标签，让 Credit 自己跑完流程，期间轮询接口
-    function creditBackgroundLogin(user) {
+
+    /* ---- Credit 纯代码 OAuth（不开任何标签页）----
+     * 实测 GET /api/v1/oauth/state 返回 404，说明 state/nonce 是登录页前端自己生成的 UUID
+     * （此前抓包也确认两者是同一个 UUID）。所以这里自己生成一个，直接走授权流程：
+     *   生成UUID → GM请求 connect 授权页 → 解析"允许"链接 → GM请求它拿到 code
+     *   → GM请求 credit 回调种 Cookie → 读余额
+     * 全程 5 个跨域请求，2~3 秒完成，完全不受后台标签节流影响。 */
+    function uuid4() {
+        // crypto.randomUUID 在部分旧内核里没有，退化到 getRandomValues 手拼
+        try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (_) {}
+        const b = new Uint8Array(16);
+        try { crypto.getRandomValues(b); } catch (_) { for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256); }
+        b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+        const h = Array.prototype.map.call(b, function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+        return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+    }
+    async function creditCodeLogin() {
+        const st = uuid4();
+        const authUrl = CONNECT_HOST + "/oauth2/authorize?client_id=" + encodeURIComponent(CREDIT.CLIENT_ID) +
+            "&nonce=" + encodeURIComponent(st) +
+            "&redirect_uri=" + encodeURIComponent(CREDIT.REDIRECT) +
+            "&response_type=code&scope=" + encodeURIComponent(CREDIT.SCOPE) +
+            "&state=" + encodeURIComponent(st);
+        const a = await gmFetch(authUrl, { headers: { "Accept": "text/html,application/xhtml+xml" }, timeout: 15000 });
+        if (a.status >= 400 || /just a moment|cf-chl|cloudflare|attention required/i.test(a.responseText || "")) {
+            throw arNonJsonError(a, a.finalUrl);
+        }
+        // 之前授权过的话，授权页会直接 302 带回 code；否则要再点一次"允许"
+        let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
+        if (!cs) {
+            const ap = parseApprove(a.responseText);
+            if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
+            const approved = await gmFetch(new URL(ap, CONNECT_HOST).href, {
+                headers: { "Accept": "text/html,application/xhtml+xml" }, timeout: 15000
+            });
+            cs = paramsFrom(approved.finalUrl) || paramsFromText(approved.responseText);
+        }
+        if (!cs) throw new Error("授权完成但没返回code");
+        // 回调到 Credit 让它种下登录 Cookie（这一步是页面路由，返回 HTML 也算正常）
+        await gmFetch(CREDIT.REDIRECT + "?code=" + encodeURIComponent(cs.code) + "&state=" + encodeURIComponent(cs.state), {
+            headers: { "Accept": "text/html,application/xhtml+xml" }, timeout: 15000
+        }).catch(function () {});
+        return await creditUserInfo(CREDIT.API_TIMEOUT);
+    }
+
+    /* ---- 前台标签兜底 ----
+     * 纯代码失败（多半是 Credit 的回调必须由前端 JS 完成）时，开一个前台标签让站点自己跑完。
+     * 用前台是因为后台标签会被 Chrome 节流：Next.js 的 JS 根本跑不完，登录按钮不会渲染。
+     * 拿到余额立刻关闭，最长 30 秒。 */
+    function creditForegroundLogin() {
         return new Promise(function (resolve, reject) {
             let handle = null;
-            gmSet(CREDIT.FLOW, JSON.stringify({ step: "start", ts: Date.now() }));
-            try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1", { active: false, insert: true, setParent: true }); }
+            try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1", { active: true, insert: true, setParent: true }); }
             catch (_) { handle = null; }
-            if (!handle) { gmDel(CREDIT.FLOW); reject(new Error("无法打开后台标签")); return; }
+            if (!handle) { reject(new Error("无法打开标签")); return; }
             const started = Date.now();
             const iv = setInterval(function () {
-                if (Date.now() - started > CREDIT.LOGIN_TIMEOUT) {
-                    clearInterval(iv); gmDel(CREDIT.FLOW); try { handle.close(); } catch (_) {}
+                if (Date.now() - started > CREDIT.TAB_TIMEOUT) {
+                    clearInterval(iv); try { handle.close(); } catch (_) {}
                     reject(new Error("超时")); return;
                 }
                 creditUserInfo(CREDIT.API_TIMEOUT).then(function (info) {
-                    clearInterval(iv); gmDel(CREDIT.FLOW); try { handle.close(); } catch (_) {}
+                    clearInterval(iv); try { handle.close(); } catch (_) {}
                     resolve(info);
                 }).catch(function () { /* 还没登录完，继续等 */ });
-            }, 2000);
+            }, 1000);
         });
     }
-    // manual=true 时绕过每日 2 次限制且不计数（Q10 / Q11）
+
+    /* 刷新 LDC 积分
+     *   当天成功过 → 直接吃缓存，一个请求都不发
+     *   否则       → 纯代码；失败再开前台标签（受互斥锁保护，手动点击不受限）
+     *   失败不锁定当天，下次打开论坛重新走一遍 */
     async function refreshCredit(manual) {
         if (idleSuspended && !manual) return;    // 刷帖期间不发任何 Credit 请求
         const u = me.username;
         if (!u) return;
-        // 先显示缓存（B4）
-        const cache = readCreditCache(u);
-        if (cache) { ldc = { state: "ok", value: cache.v, cached: true, msg: "" }; render(); }
-        else { ldc = { state: "loading", value: "", cached: false, msg: "" }; render(); }
+
+        if (!manual) {
+            const cache = readCreditCache(u);
+            if (cache) { ldc = { state: "ok", value: cache.v, msg: "" }; render(); return; }
+        }
+        ldc = { state: "loading", value: "", msg: "读取中…" }; render();
 
         let info = null;
         try { info = await creditUserInfo(CREDIT.API_TIMEOUT); }
         catch (e) {
-            if (!e || !e.needLogin) {
-                if (cache) { ldc = { state: "ok", value: cache.v, cached: true, msg: (e && e.message) || "" }; }
-                else { ldc = { state: "fail", value: "", cached: false, msg: (e && e.message) || "读取失败" }; }
-                render(); return;
-            }
-            // 需要登录 → 后台 OAuth
-            if (!manual && creditTryCount(u) >= CREDIT.MAX_TRY_PER_DAY) {
-                if (cache) ldc = { state: "ok", value: cache.v, cached: true, msg: "今日自动登录次数已用完，点我手动刷新" };
-                else ldc = { state: "fail", value: "", cached: false, msg: "今日自动登录次数已用完，点我手动刷新" };
-                render(); return;
-            }
-            if (!manual) bumpCreditTry(u);
-            ldc = { state: "loading", value: cache ? cache.v : "", cached: !!cache, msg: "后台登录中…" }; render();
-            try { info = await creditBackgroundLogin(u); }
+            if (!e || !e.needLogin) { ldc = { state: "fail", value: "", msg: (e && e.message) || "读取失败" }; render(); return; }
+            // 未登录 → 先试纯代码
+            try { info = await creditCodeLogin(); }
             catch (e2) {
-                const m = (e2 && e2.message) || "失败";
-                if (cache) ldc = { state: "ok", value: cache.v, cached: true, msg: "Credit " + m };
-                else ldc = { state: "fail", value: "", cached: false, msg: "Credit " + m };
-                render(); return;
+                // 纯代码也不行 → 前台标签兜底。没登录论坛时开了也是白开
+                if (!me.username) { ldc = { state: "fail", value: "", msg: "未登录 LINUX DO" }; render(); return; }
+                if (!manual && !acquireTabLock()) {
+                    ldc = { state: "fail", value: "", msg: "另一个标签正在登录，稍后重试" }; render(); return;
+                }
+                ldc = { state: "loading", value: "", msg: "打开标签登录中…" }; render();
+                try { info = await creditForegroundLogin(); }
+                catch (e3) {
+                    ldc = { state: "fail", value: "", msg: "纯代码:" + ((e2 && e2.message) || e2) + " / 标签:" + ((e3 && e3.message) || e3) };
+                    render(); return;
+                }
+                finally { if (!manual) releaseTabLock(); }
             }
         }
         if (!info) return;
-        // Q9：账号核对，不匹配不写缓存
+        // 账号核对：论坛和 Credit 登录的不是同一个号时，绝不把别人的余额当成你的
         if (info.username && normUser(u) && info.username !== normUser(u)) {
-            ldc = { state: "mismatch", value: "", cached: false, msg: "论坛 @" + u + " / Credit @" + info.username };
+            ldc = { state: "mismatch", value: "", msg: "论坛 @" + u + " / Credit @" + info.username };
             render(); return;
         }
         writeCreditCache(u, info.balance);
-        ldc = { state: "ok", value: info.balance, cached: false, msg: "" };
+        ldc = { state: "ok", value: info.balance, msg: "" };
         render();
     }
 
@@ -1305,51 +1397,72 @@
 
     /* ============================================================
      * AR 每日签到
-     * 规则：当天成功过一次就不再退出重登（那会白白多跑一轮 OAuth，
-     *       且 AgentRouter 的签到本来就一天一次），直接显示当天缓存。
-     *       跨零点后缓存自然失效，重新签一次。
-     *       手动点 Agent 按钮 = force，强制重签 + 刷新余额。
+     * 签到和余额【分开锁定】：
+     *   DAYKEY 记"今天签过了"，BALDAY 记"今天余额读到了"。
+     *   AgentRouter 一天只给一次奖励，所以签过就绝不重签；
+     *   余额没读到只补查余额，不再白跑一遍完整 OAuth。
+     * 三种进入路径：
+     *   两个都锁定了     → 一个请求都不发，直接吃缓存
+     *   只签到锁定了     → 只补查余额（不退出登录、不重新授权）
+     *   都没锁定         → 走完整签到流程
+     * 手动点 R1 的 Agent 文字 = force，强制重签 + 刷新余额，不受任何限制。
      * ============================================================ */
     function runArCheckin(force) {
         if (arState === "running") return;
         if (idleSuspended && !force) return;       // 刷帖期间不跑签到
         const today = todayStr();
-        if (!force && gmGet(AR.DAYKEY, "") === today) {
+        const signedToday = gmGet(AR.DAYKEY, "") === today;
+        const balToday = gmGet(AR.BALDAY, "") === today;
+
+        if (!force && signedToday && balToday) {
+            // 两件事今天都成了：直接读缓存，零请求
             const saved = loadArNote();
-            if (saved) { arState = saved.state; arText = saved.text; arBal = saved.bal; }
+            if (saved && saved.bal) { arState = saved.state; arText = saved.text; arBal = saved.bal; }
             else { arState = "ok"; arText = "签到成功"; arBal = gmGet(AR.BALKEY, "") || ""; }
-            // 当天已签过但余额没存下来（例如上次查余额时网络抖动）：只补查余额，不重新签到
-            if (arState === "ok" && !arBal) refreshArBalanceOnly();
             render(); return;
         }
-        arState = "running"; arText = "签到中…"; arBal = ""; render();
-        arCheckin(function (s) { arText = s; render(); }).then(function (r) {
-            gmSet(AR.DAYKEY, today);
-            arState = "ok";
-            // 不论是本次签到成功还是今天早已签过，面板统一显示"签到成功"
-            arText = "签到成功";
-            saveArNote(arState, arText, arBal);
-            render();
-            arBalance(r && r.user).then(function (bal) {
-                if (!bal || arState !== "ok") return;
-                arBal = bal; gmSet(AR.BALKEY, bal);
+
+        if (!force && signedToday) {
+            // 今天已签到，只是余额没读到 —— 只补查余额，绝不重复签到
+            arState = "running"; arText = "读取余额中…"; arBal = ""; render();
+            arBalance(null, { retries: 3 }).then(function (bal) {
+                arState = "ok"; arText = "签到成功"; arBal = bal;
+                gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
+                render();
+            }).catch(function (e) {
+                // 签到本身是成功的，只是余额读不到 → 待刷新，不是失败
+                arState = "pending"; arBal = "";
+                arText = "签到已成功，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
+                saveArNote("pending", arText, "");
+                render();
+            });
+            return;
+        }
+
+        arState = "running"; arText = "签到中…"; arBal = ""; render();
+        // 内部进度(退出登录/获取state/…)只进 arText 供 tooltip 用，面板固定显示"签到中…"
+        arCheckin(function (s) { arText = s; }, force).then(function (r) {
+            // 签到这一步已经成功，先把它锁住，后面余额失败也不用重签
+            gmSet(AR.DAYKEY, today);
+            /* 关键：GM 请求完成 OAuth 回调后，Set-Cookie 写进浏览器还需要一点时间。
+             * 立刻查余额多半会 401（这就是"刷新一下就好了"的原因），所以先等 800ms。 */
+            return arBalance(r && r.user, { waitFirst: 800, retries: 3 }).then(function (bal) {
+                arState = "ok"; arText = "签到成功"; arBal = bal;
+                gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
+                saveArNote(arState, arText, arBal);
+                render();
+            }).catch(function (e) {
+                arState = "pending"; arBal = "";
+                arText = "签到已成功，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
+                saveArNote("pending", arText, "");
                 render();
             });
         }).catch(function (e) {
-            arState = "fail"; arText = "AR失败:" + ((e && e.message) || e); arBal = "";
+            arState = "fail"; arText = (e && e.message) || String(e); arBal = "";
             saveArNote("fail", arText, "");
             render();
         });
-    }
-    // 只补查余额，不触碰签到状态（当天已签到、但余额没拿到时用）
-    function refreshArBalanceOnly() {
-        arBalance(null).then(function (bal) {
-            if (!bal || arState !== "ok") return;
-            arBal = bal; gmSet(AR.BALKEY, bal);
-            saveArNote(arState, arText, arBal);
-            render();
-        }).catch(function () {});
     }
     // 在 AgentRouter 标签页手动登录后回写的余额：切回论坛时取一次，只覆盖余额
     function pullSideBalance() {
@@ -1359,7 +1472,10 @@
             if (!v || !v.bal) return;
             if (Date.now() - Number(v.at || 0) > 30 * 60 * 1000) return;
             if (v.bal === arBal) return;
-            arBal = v.bal; gmSet(AR.BALKEY, v.bal);
+            arBal = v.bal;
+            gmSet(AR.BALKEY, v.bal); gmSet(AR.BALDAY, todayStr());
+            // 你在 AgentRouter 标签手动登录后拿到了余额，"待刷新"就该转成成功
+            if (arState === "pending") { arState = "ok"; arText = "签到成功"; }
             if (arState === "ok") saveArNote(arState, arText, arBal);
             render();
         } catch (_) {}
@@ -1417,30 +1533,45 @@
             : [mSpan("点赞", m.likes_given), mSpan("获赞", m.likes_received), mSpan("获赞天数", m.liked_days), mSpan("获赞用户", m.liked_by_users)].filter(Boolean).join(" ");
         return [(A || "等级3 数据不全，去 connect 刷新") + c2, (B || "—") + c3];
     }
-    /* r1 三段之间的间距：用两个 &nbsp; + 一个可折行普通空格。
-     * 纯空格在 HTML 里会被合并成一个，所以必须用 &nbsp;。
-     * 实测三空格方案：常规 177px、20 字用户名 242px，均在 249px 内。 */
+    /* ---- R1 布局 ----
+     * 用户名   TL3   LDC：1215.9   Agent：$129.11              ⏱计时
+     * 四段之间各三个空格（两个 &nbsp; + 一个普通空格，纯空格会被 HTML 合并）。
+     * 实测(可用 249px)：10px 字号要 275px 放不下，降到 9px 后是 248px 刚好。
+     * 所以 R1 用 9px（面板 CSS 里已同步）。 */
     const SP3 = "&nbsp;&nbsp; ";
-    // TL0/1 红，TL2/3/4 绿，取不到 trust_level 显示 TL? 灰；未登录时整个不显示
+    // 等级徽章：一律绿色；取不到 trust_level 显示 TL? 灰；未登录时整个不显示
     function tlBadge() {
         if (!me.username) return "";
         const tl = me.trustLevel;
         if (tl === null) return '<span style="color:#aaa;">' + SP3 + 'TL?</span>';
-        const col = tl <= 1 ? "#ff8a8a" : "#8fe0b0";
-        return '<span style="color:' + col + ';">' + SP3 + "TL" + tl + "</span>";
+        return '<span style="color:#8fe0b0;">' + SP3 + "TL" + tl + "</span>";
     }
-    // LDC 积分：成功绿 / 缓存带灰色标注 / 失败红
+    // LDC 三态：LDC：获取中 / LDC：1215.9 / LDC：失败
     function ldcSpan() {
         if (!me.username) return "";
         const base = '<span id="ldh_ldc" style="cursor:pointer;';
         if (ldc.state === "ok") {
-            const tag = ldc.cached ? '<span style="color:#888;">（缓存）</span>' : "";
-            return base + 'color:#8fe0b0;" title="' + esc(ldc.msg || "可用 LINUX DO Credits，点击刷新") + '">' + SP3 + esc(ldc.value) + "LDC" + tag + "</span>";
+            return base + 'color:#8fe0b0;" title="' + esc(ldc.msg || "可用 LINUX DO Credits，点击刷新") + '">' + SP3 + "LDC：" + esc(ldc.value) + "</span>";
         }
-        if (ldc.state === "loading") return base + 'color:#e0c060;" title="' + esc(ldc.msg || "读取中") + '">' + SP3 + "LDC…</span>";
+        if (ldc.state === "loading") return base + 'color:#e0c060;" title="' + esc(ldc.msg || "读取中") + '">' + SP3 + "LDC：获取中</span>";
         if (ldc.state === "mismatch") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg) + '">' + SP3 + "LDC：账号不符</span>";
         if (ldc.state === "fail") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg || "读取失败，点击重试") + '">' + SP3 + "LDC：失败</span>";
-        return base + 'color:#888;" title="点击读取 Credit 积分">' + SP3 + "LDC …</span>";
+        return base + 'color:#888;" title="点击读取 Credit 积分">' + SP3 + "LDC：获取中</span>";
+    }
+    /* R1 上的 Agent 四态：
+     *   获取中   黄  正在签到或读余额
+     *   $129.11  绿  签到+余额都到手
+     *   待刷新   黄  签到确实成功了，只是余额没读到（点击可只补查余额）
+     *   失败     红  签到本身失败，tooltip 里有具体原因 */
+    function arSpan() {
+        if (!me.username) return "";
+        const base = '<span id="ldh_arbal" style="cursor:pointer;';
+        if (arState === "running") return base + 'color:#e0c060;" title="' + esc(arText || "签到中") + '">' + SP3 + "Agent：获取中</span>";
+        if (arState === "pending") return base + 'color:#e0c060;" title="' + esc(arText || "签到已成功，余额读取失败，点击重试") + '">' + SP3 + "Agent：待刷新</span>";
+        if (arState === "fail") return base + 'color:#ff8a8a;" title="' + esc(arText || "签到失败") + '">' + SP3 + "Agent：失败</span>";
+        if (arState === "ok" && arBal) return base + 'color:#8fe0b0;" title="点击强制重新签到">' + SP3 + "Agent：" + esc(arBal) + "</span>";
+        if (arState === "ok") return base + 'color:#e0c060;" title="签到成功，余额读取中">' + SP3 + "Agent：获取中</span>";
+        return base + 'color:#888;" title="点击签到">' + SP3 + "Agent：获取中</span>";
     }
     /* ---- r4 文案（实测宽度均在 249px 内，9px 字号）----
      *   ① 未跑刷帖   Agent：签到成功 · 余额 $129.11          134px
@@ -1460,6 +1591,36 @@
         }
         return "脚本结束：主题 " + sent.topics + " 丨 回复 " + sent.replies + " 丨 点赞 " + sent.likes;
     }
+    /* ---- r4 错误汇总 ----
+     * 平时完全空白；一旦哪里出错就把所有错误用 " / " 拼起来显示。
+     * 超过 22 字截断加省略号，完整内容进 tooltip（249px 放不下长错误信息）。
+     * Agent 的余额单独显示在 R1，所以这里只在它【失败或待刷新】时才补一条错误。 */
+    const ERR_MAXLEN = 22;
+    function collectErrors() {
+        const list = [];
+        /* R1 上只显示了状态词（Agent：失败 / LDC：失败），看不出为什么失败，
+         * 所以 R4 这里补带原因的完整说明。"待刷新"R1 已经说清楚了，不重复。 */
+        if (arState === "fail") list.push({ t: "Agent：" + (arText || "签到失败"), full: arText || "签到失败" });
+        if (ldc.state === "fail") list.push({ t: "LDC：" + (ldc.msg || "读取失败"), full: ldc.msg || "读取失败" });
+        else if (ldc.state === "mismatch") list.push({ t: "LDC：账号不符", full: ldc.msg || "论坛账号与 Credit 账号不同" });
+        if (getAnyBan(me.username)) list.push({ t: "any：已被封禁", full: "AnyRouter 账号已被封禁" });
+        if (!isLowTL() && !readTL3() && (syncState === "cf" || syncState === "err" || syncState === "empty" || syncState === "nogrant" || syncState === "otheruser" || syncState === "popupblock")) {
+            list.push({ t: "等级同步失败", full: "connect 等级进度同步失败（syncState=" + syncState + "）" });
+        }
+        if (isLowTL() && summaryState === "fail") list.push({ t: "摘要读取失败", full: "summary.json 读取失败" });
+        return list;
+    }
+    function errorLine() {
+        const list = collectErrors();
+        if (!list.length) return "";
+        const joined = list.map(function (x) { return x.t; }).join(" / ");
+        // tooltip 给完整信息：t 已经包含详情时就不再重复贴 full
+        const full = list.map(function (x) {
+            return (x.full && x.t.indexOf(x.full) < 0) ? x.t + "（" + x.full + "）" : x.t;
+        }).join("\n");
+        const shown = joined.length > ERR_MAXLEN ? joined.slice(0, ERR_MAXLEN) + "…" : joined;
+        return '<span style="color:#ff8a8a;" title="' + esc(full) + '">' + esc(shown) + "</span>";
+    }
     function render() {
         const r1 = document.getElementById("ldh_r1"); if (!r1) return;
         const M = MODES[activeMode];
@@ -1472,15 +1633,21 @@
             let t = document.getElementById("ldh_timer");
             if (t) { t.textContent = timer; }
             else {
-                r1.innerHTML = nameHtml + tlBadge() + ldcSpan() +
+                r1.innerHTML = nameHtml + tlBadge() + ldcSpan() + arSpan() +
                     '<span id="ldh_timer" style="float:right;color:#8fe0b0;margin-left:8px;">' + timer + "</span>";
             }
         } else {
-            r1.innerHTML = nameHtml + tlBadge() + ldcSpan() +
+            r1.innerHTML = nameHtml + tlBadge() + ldcSpan() + arSpan() +
                 '<span id="ldh_timer" style="float:right;color:#8fe0b0;margin-left:8px;">' + timer + "</span>";
             // r1 每次都由 innerHTML 重建，旧节点连同监听一起丢弃，这里必须重新绑定
             const bindLdc = document.getElementById("ldh_ldc");
             if (bindLdc) bindLdc.addEventListener("click", function () { refreshCredit(true); });
+            const bindAr = document.getElementById("ldh_arbal");
+            if (bindAr) bindAr.addEventListener("click", function () {
+                /* 待刷新 = 今天已经签到成功、只差余额。这时点一下不该重新走一遍
+                 * 完整 OAuth（会白白退出再登录），走 force=false 让它只补查余额。 */
+                runArCheckin(arState !== "pending");
+            });
         }
 
         // ---- r2/r3：运行期完全冻结（rowsForPanel 会读 GM 存储，每秒读一次太贵）----
@@ -1500,11 +1667,8 @@
         } else if (banMsg) {
             r4.innerHTML = '<span style="color:#ff8a8a;">' + esc(banMsg) + "</span>";
         } else {
-            const col = arState === "ok" ? "#8fe0b0" : arState === "fail" ? "#ff8a8a" : arState === "running" ? "#e0c060" : "#ccc";
-            const txt = arText ? ("Agent：" + arText + (arBal ? " · 余额 " + arBal : "")) : "";
-            const ban = getAnyBan(me.username);
-            const banTxt = ban ? '  <span style="color:#ff8a8a;">any：已被封禁</span>' : "";
-            r4.innerHTML = (txt ? '<span style="color:' + col + ';">' + esc(txt) + "</span>" : "") + banTxt;
+            // 平时完全空白，只在真出错时才显示（Agent 余额在 R1，不在这里重复）
+            r4.innerHTML = errorLine();
         }
 
         // ---- 标题栏按钮：运行期不更新（会读 GM 存储）----
@@ -1521,13 +1685,6 @@
                 sy.textContent = (syncState === "syncing" || syncState === "opening") ? "同步中…" : (failed && !hasData) ? "⟳重试" : (syncState === "ok" || hasData) ? "✓已同步" : "⟳同步";
                 sy.style.color = (failed && !hasData) ? "#ff8a8a" : "#8fe0b0";
             }
-        }
-        const ab = document.getElementById("ldh_ar");
-        if (ab) {
-            if (arState === "running") { ab.textContent = "Agent…"; ab.style.background = "#a07d2a"; }
-            else if (arState === "ok") { ab.textContent = "✓Agent"; ab.style.background = "#2f6f3e"; }
-            else if (arState === "fail") { ab.textContent = "Agent!"; ab.style.background = "#8a3a3a"; }
-            else { ab.textContent = "Agent"; ab.style.background = "#666"; }
         }
         // 封禁时 Any 按钮变红
         const nb = document.getElementById("ldh_any");
@@ -1668,7 +1825,6 @@
             '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;min-height:20px;padding:4px 0 0 0;line-height:1.6;overflow:visible;">' +
             '<span style="font-weight:bold;font-size:10px;">⚡ LINUX DO 助手</span>' +
             '<span style="display:flex;align-items:center;">' +
-            '<button id="ldh_ar" style="' + smallBtnCss + 'background:#666;color:#fff;" title="Agent">Agent</button>' +
             '<button id="ldh_any" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AnyRouter">Any</button>' +
             '<span id="ldh_sync" style="cursor:pointer;font-size:9px;color:#8fe0b0;margin-left:6px;" title="同步等级进度">⟳同步</span>' +
             '<span id="ldh_min" style="cursor:pointer;margin-left:6px;font-size:12px;color:#ccc;">－</span>' +
@@ -1680,7 +1836,8 @@
             '<button id="ldh_fast"  style="' + btnCss + 'background:' + MODES.fast.color + ';">快速升级</button>' +
             '<button id="ldh_idle"  style="' + btnCss + 'background:' + MODES.idle.color + ';">日常挂机</button>' +
             '</div>' +
-            '<div id="ldh_r1" style="' + rowCss + '"></div>' +
+            // R1 有四段内容，10px 放不下(275px>249px)，9px 才够(248px)
+            '<div id="ldh_r1" style="' + rowCss + 'font-size:9px;"></div>' +
             '<div id="ldh_r2" style="' + rowCss + 'font-size:9px;"></div>' +
             '<div id="ldh_r3" style="' + rowCss + 'font-size:9px;"></div>' +
             '<div id="ldh_r4" style="' + rowCss + 'margin-top:2px;font-size:9px;"></div>' +
@@ -1689,7 +1846,6 @@
         MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
         document.getElementById("ldh_sync").addEventListener("click", function () { sync(); });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
-        document.getElementById("ldh_ar").addEventListener("click", function () { runArCheckin(true); });
         document.getElementById("ldh_any").addEventListener("click", function () {
             // Q7：手动点击 = 清除封禁标记并重试
             if (getAnyBan(me.username)) clearAnyBan(me.username);
@@ -1717,20 +1873,27 @@
             if (me.username) gmSet(LD_USER_KEY, normUser(me.username));
             render();
             if (!me.username) return;
-            // Q5：TL0/1 跳过 connect 同步，改拉 summary.json
-            if (isLowTL()) { loadSummary(); }
-            else if (!sessionStorage.getItem("ldh_autosync")) {
+            // TL0/1 在 connect 上拿不到明细，改拉 summary.json；两者都做 10 分钟节流
+            if (isLowTL()) {
+                if (!sessionStorage.getItem("ldh_autosum")) {
+                    sessionStorage.setItem("ldh_autosum", "1");
+                    const lastSum = Number(localStorage.getItem("ldh_autosum_ts") || 0);
+                    if (Date.now() - lastSum > SYNC_THROTTLE_MS) { localStorage.setItem("ldh_autosum_ts", String(Date.now())); loadSummary(); }
+                    else { loadSummary(); }   // 有节流也要显示一次：读的是本地已有数据，不发请求
+                }
+            } else if (!sessionStorage.getItem("ldh_autosync")) {
                 sessionStorage.setItem("ldh_autosync", "1");
                 const lastTs = Number(localStorage.getItem("ldh_autosync_ts") || 0);
-                if (Date.now() - lastTs > 5 * 60 * 1000) { localStorage.setItem("ldh_autosync_ts", String(Date.now())); sync(); }
+                if (Date.now() - lastTs > SYNC_THROTTLE_MS) { localStorage.setItem("ldh_autosync_ts", String(Date.now())); sync(); }
             }
-            // G1=a：每次打开论坛拉一次 Credit（先显缓存，再刷新）
-            setTimeout(function () { refreshCredit(false); }, 1200);
+            /* Credit 与 AgentRouter 串行：两个都可能开前台标签抢焦点，
+             * 必须等前一个彻底结束（成功/失败/超时）再启动后一个，否则会连弹两个标签。 */
+            setTimeout(function () {
+                refreshCredit(false).catch(function () {}).then(function () { runArCheckin(false); });
+            }, 1200);
         });
 
-        setTimeout(function () { runArCheckin(false); }, 2500);
-
-        // Q14=b + Q17：切回标签页时读一次别处登录回写的余额
+        // 切回标签页时读一次别处登录回写的余额
         window.addEventListener("focus", pullSideBalance);
         document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") pullSideBalance(); });
     }
