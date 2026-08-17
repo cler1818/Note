@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.3
+// @version      1.0.5
 // @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -45,7 +45,7 @@
         FAST_LIKES:    [1, 1],         // 点赞数量
 
         // ---- 日常挂机 ----
-        IDLE_MINUTES:  500,            // 运行时间（分钟）
+        IDLE_MINUTES:  1000,           // 运行时间（分钟）
         IDLE_TOPICS:   [200, 500],     // 主题数量
         IDLE_REPLIES:  [2000, 5000],   // 帖子数量
         IDLE_LIKES:    [0, 0],         // 点赞数量
@@ -92,9 +92,15 @@
     function stripAt(s) { return String(s || "").replace(/^@/, "").trim(); }
     function normUser(s) { return stripAt(s).toLowerCase(); }
     function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+    /* 自然天固定按东八区(UTC+8 北京时间)计算，不跟随浏览器本地时区。
+     * 起因：指纹浏览器常把环境时区设成美西等地(实测环境91为 America/Los_Angeles，
+     *       比北京慢15小时)。若用 new Date() 取本地日期，脚本算出的"今天"会比
+     *       北京时间落后一天，导致当天签到被"今天已签过"的锁挡住，白等15小时。
+     * 实现：用 Date.now()(UTC毫秒)加8小时偏移后取 UTC 字段，完全绕开本地时区，
+     *       也不依赖 toLocaleString 的时区数据库(部分指纹浏览器会篡改它)。 */
     function todayStr() {
-        const d = new Date();
-        return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+        const d = new Date(Date.now() + 8 * 3600 * 1000);
+        return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
     }
     function gmGet(k, fb) { try { return GM_getValue(k, fb); } catch (_) { return fb; } }
     function gmSet(k, v) { try { GM_setValue(k, v); } catch (_) {} }
@@ -844,7 +850,7 @@
         ENTER_MIN: 700, ENTER_MAX: 1200,
         HARD_BLOCK_RETRY_THRESHOLD: 600, CF_BACKOFF_MS: 10000, MAX_CONSEC_CF: 5,
         LIKE_REACTION: "heart",
-        GITHUB_LIST_URL: "https://raw.githubusercontent.com/cler1818/Note/refs/heads/main/name.txt",
+        GITHUB_LIST_URL: "https://raw.githubusercontent.com/cler1818/Note/refs/heads/main/linuxdo/name.txt",
         WHITELIST_CACHE_KEY: "ld_helper_whitelist",
         REQLOG_KEY: "ld_helper_reqlog", WINDOW_MS: 60 * 60 * 1000,
         WARN_REQ: 130, REFUSE_START: 165, HARD_STOP: 185, SAFE_RESUME: 120
