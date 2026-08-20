@@ -1,5 +1,42 @@
-# 备注：如果只想让某一个完整域名直连，就写：DOMAIN,www.test.com    
-# 备注：DOMAIN-SUFFIX,example.com  表示 example.com 以及它的所有子域名都走直连example.com、www.example.com、api.example.com
+# ==============================
+# 自定义直连规则
+# ==============================
+
+# 规则一：DOMAIN-SUFFIX
+# 匹配指定主域名以及它的所有子域名
+# 例如下面的规则可以匹配：
+# example.com
+# www.example.com
+# api.example.com
+
+# DOMAIN-SUFFIX,example.com
+
+
+# 规则二：DOMAIN
+# 只匹配一个完整域名，不匹配其他子域名
+# 例如下面的规则只匹配：
+# www.example.com
+# 不会匹配 example.com 或 api.example.com
+
+#DOMAIN,www.example.com
+
+
+
+# 规则三：DOMAIN-KEYWORD
+# 只要域名中包含指定关键词就会匹配
+# 例如关键词是 example，可以匹配：
+# example.com
+# www.example.net
+# example-test.org
+# 注意：这种规则范围较大，可能出现误匹配
+
+# DOMAIN-KEYWORD,example
+
+
+# ==============================
+# 下方是自己配置的公益站
+# ==============================
+
 
 # 黑与白公益站
 DOMAIN-SUFFIX,hybgzs.com
