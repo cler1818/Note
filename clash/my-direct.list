@@ -1,4 +1,5 @@
 # 备注：如果只想让某一个完整域名直连，就写：DOMAIN,www.test.com    
 # 备注：DOMAIN-SUFFIX,example.com  表示 example.com 以及它的所有子域名都走直连example.com、www.example.com、api.example.com
 
+# 黑与白公益站
 DOMAIN-SUFFIX,hybgzs.com
