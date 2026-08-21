@@ -8,7 +8,7 @@ Chothepi
 snes
 zohu
 tronotol
-usely
+
 Ricaowe
 Grigu
 wipro
@@ -88,3 +88,7 @@ cer
 vser
 hea
 agen
+lser
+sonet
+uber
+fac
