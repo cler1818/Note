@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.5
-// @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录
+// @version      1.0.6
+// @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录 + 一键获取邀请链接
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
 // @downloadURL  https://github.com/cler1818/Note/raw/refs/heads/main/linuxdo/linux-do-helper.user.js
@@ -17,6 +17,7 @@
 // @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
+// @grant        GM_setClipboard
 // @connect      linux.do
 // @connect      connect.linux.do
 // @connect      credit.linux.do
@@ -45,7 +46,7 @@
         FAST_LIKES:    [1, 1],         // 点赞数量
 
         // ---- 日常挂机 ----
-        IDLE_MINUTES:  1000,           // 运行时间（分钟）
+        IDLE_MINUTES:  500,            // 运行时间（分钟）
         IDLE_TOPICS:   [200, 500],     // 主题数量
         IDLE_REPLIES:  [2000, 5000],   // 帖子数量
         IDLE_LIKES:    [0, 0],         // 点赞数量
@@ -1848,6 +1849,271 @@
         watchComposer();
     }
 
+    /* ============================================================
+     * 一键获取邀请链接（1.0.6 新增，合并自独立版 3.0.0）
+     * 流程：实时读当前用户 → 查未使用的待处理邀请 → 有就直接复制
+     *       没有就【静默创建】（不弹确认框）→ 复制。
+     *
+     * 权限判断走【软判断】，故意不看 can_invite_to_forum 字段：
+     * 那个字段一旦缺失或被站点改名，有权限的号也会被脚本自己误杀、功能直接失效。
+     * 改成让服务器说话 —— 只读的 invited.json 对没权限的号会回 403/404，
+     * 结论一样准，但字段变了也不影响，而且没权限的号照样不会发出 POST 写请求。
+     *
+     * 结果只有三类：成功 / 失败（含无权限、冷却中、超时） / 未登录，
+     * 全部走底部居中的 toast，不占用面板 r4 那一行。
+     * ============================================================ */
+    const INVITE = {
+        TIMEOUT_MS: 20000,
+        TOAST_ID: "ldh_invite_toast",
+        URL_RE: /^https:\/\/linux\.do\/invites\/[A-Za-z0-9_-]+(?:[/?#].*)?$/i,
+        NOT_LOGIN: "尚未登录 Linux.do，请登录后再试。",
+        NO_PERM: "无邀请权限，当前账号不能获取邀请链接。"
+    };
+    let inviteBusy = false, inviteToastTimer = null;
+
+    /* toast：底部居中，z-index 盖在面板(999999)之上。
+     * 全内联样式、不用 GM_addStyle —— 少要一个 @grant。
+     * 代价是写不了 :hover / :disabled 伪类，所以按钮的禁用态由 JS 直接设
+     * opacity/cursor（和 markButtons() 里置灰三个模式按钮的做法一致）。
+     * sticky=true 的那条永不自动消失：拿到链接但复制失败时用，
+     * 链接绝不能因为 15 秒到点就消失 —— 那可能是刚扣掉额度换来的。
+     * 三类 toast 都能点一下提前关掉。 */
+    function inviteToast(msg, type, sticky) {
+        let box = document.getElementById(INVITE.TOAST_ID);
+        if (!box) {
+            box = document.createElement("div");
+            box.id = INVITE.TOAST_ID;
+            box.addEventListener("click", function () { inviteToastHide(); });
+            document.body.appendChild(box);
+        }
+        const bg = type === "error" ? "#c62828" : type === "info" ? "#4a5568" : "#16883d";
+        box.style.cssText = "position:fixed;left:50%;bottom:76px;z-index:2147483647;transform:translateX(-50%);" +
+            "box-sizing:border-box;width:max-content;max-width:min(780px,calc(100vw - 32px));" +
+            "padding:11px 16px;border-radius:8px;color:#fff;background:" + bg + ";" +
+            "box-shadow:0 4px 18px rgba(0,0,0,.28);font-size:14px;line-height:1.55;" +
+            "text-align:center;overflow-wrap:anywhere;cursor:pointer;";
+        box.textContent = msg;
+        box.hidden = false;
+        if (inviteToastTimer) { clearTimeout(inviteToastTimer); inviteToastTimer = null; }
+        if (!sticky) inviteToastTimer = setTimeout(inviteToastHide, type === "error" ? 15000 : 9000);
+    }
+    function inviteToastHide() {
+        if (inviteToastTimer) { clearTimeout(inviteToastTimer); inviteToastTimer = null; }
+        const box = document.getElementById(INVITE.TOAST_ID);
+        if (box) box.hidden = true;
+    }
+
+    // 邀请接口全是 linux.do 同源，用原生 fetch 就够，不需要 GM_xmlhttpRequest
+    function inviteFetch(url, options) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(function () { ctrl.abort(); }, INVITE.TIMEOUT_MS);
+        const opts = Object.assign({ credentials: "same-origin", cache: "no-store" }, options || {});
+        opts.signal = ctrl.signal;
+        return fetch(url, opts).then(function (r) {
+            clearTimeout(timer); return r;
+        }, function (e) {
+            clearTimeout(timer);
+            if (e && e.name === "AbortError") throw new Error("请求超时，请检查网络后重试。");
+            throw new Error("网络错误，请检查网络后重试。");
+        });
+    }
+    async function inviteRead(resp) {
+        let text = "";
+        try { text = await resp.text(); } catch (_) {}
+        let data = null;
+        try { data = JSON.parse(text); } catch (_) {}
+        return { data: data, text: text };
+    }
+    /* 服务器给了文字就原样透传 —— 冷却提示"请等待 71 小时后再试"这类最关键的信息
+     * 全在这里面，一旦被压成一句"失败"，你就只能瞎猜什么时候能再试。
+     * 服务器没给文字才落到通用文案，且只归成"未登录 / 无权限 / HTTP 错误"三种，
+     * 不再按等级细分（不到等级就是没有邀请入口，说清"没权限"就够了）。 */
+    function inviteErrMsg(data, text, status) {
+        const cands = (Array.isArray(data && data.errors) ? data.errors : [])
+            .concat([data && data.error, data && data.message, data && data.failed, data && data.exception]);
+        for (let i = 0; i < cands.length; i++) {
+            const s = String(cands[i] == null ? "" : cands[i]).replace(/\s+/g, " ").trim();
+            if (s) return s;
+        }
+        const plain = String(text || "").replace(/\s+/g, " ").trim();
+        if (plain && plain.charAt(0) !== "<") return plain.slice(0, 300);
+        if (status === 401) return INVITE.NOT_LOGIN;
+        if (status === 403 || status === 404) return INVITE.NO_PERM;
+        return "Linux.do 请求失败（HTTP " + status + "）。";
+    }
+    function inviteUrlOf(v) {
+        const s = String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+        return INVITE.URL_RE.test(s) ? s : "";
+    }
+
+    /* 每次点击都实时读一遍当前用户，故意不吃 #data-preloaded 那份页面快照：
+     * Discourse 是 SPA，标签页可能开了几个小时，中途在别的标签换过号，
+     * 快照里还是旧用户名 —— 拿旧名去查 invited.json 会 403，报出来是"无权限"，
+     * 明明是用户名错了，很误导。
+     * 另外未登录时这个接口回 404，绝不能落到"无权限"文案上，所以单独判掉。 */
+    async function inviteCurrentUser() {
+        const r = await inviteFetch("/session/current.json", {
+            headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
+        });
+        if (r.status === 401 || r.status === 404) throw new Error(INVITE.NOT_LOGIN);
+        const rd = await inviteRead(r);
+        if (!r.ok) throw new Error(inviteErrMsg(rd.data, rd.text, r.status));
+        const u = (rd.data && (rd.data.current_user || rd.data.currentUser)) || null;
+        const name = String((u && (u.username_lower || u.username)) || "").trim().toLowerCase();
+        if (!name) throw new Error(INVITE.NOT_LOGIN);
+        return { username: name, staff: !!(u && u.staff) };
+    }
+
+    /* 只认"还没被用掉"的邀请：redemption_count < max_redemptions_allowed。
+     * 完整链接在 invite.link 字段里 —— 页面上视觉只显示 NoZm… 这种缩写，
+     * 所以绝不能去读页面文字，必须读 JSON 字段。 */
+    function invitePickPending(list) {
+        if (!Array.isArray(list)) return "";
+        for (let i = 0; i < list.length; i++) {
+            const it = list[i], link = inviteUrlOf(it && it.link);
+            if (!link) continue;
+            const used = Number((it && it.redemption_count) || 0);
+            const max = Number((it && it.max_redemptions_allowed) || 1);
+            if (used < max) return link;
+        }
+        return "";
+    }
+    async function invitePending(username) {
+        const url = "/u/" + encodeURIComponent(username) + "/invited.json?filter=pending&offset=0";
+        const r = await inviteFetch(url, {
+            headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
+        });
+        // 软判断的落点：没权限的号连这个只读接口都读不了，服务器回 403/404
+        if (r.status === 403 || r.status === 404) throw new Error(INVITE.NO_PERM);
+        const rd = await inviteRead(r);
+        if (!r.ok) throw new Error(inviteErrMsg(rd.data, rd.text, r.status));
+        return Array.isArray(rd.data && rd.data.invites) ? rd.data.invites : [];
+    }
+
+    function invitePad2(n) { return String(n).padStart(2, "0"); }
+    /* Linux.do 前端用的格式：YYYY-MM-DD HH:mm±HH:MM
+     * 注意这里【带偏移量】发过去，服务器能还原成正确的绝对时间，
+     * 所以指纹浏览器把时区设成美西也不会算错到期时间 ——
+     * 和 todayStr() 那边的时区坑不是一回事，这里不需要写死东八区。 */
+    function inviteExpiresAt(days) {
+        const d = new Date(Date.now() + days * 24 * 3600 * 1000);
+        const off = -d.getTimezoneOffset(), sign = off >= 0 ? "+" : "-", abs = Math.abs(off);
+        return d.getFullYear() + "-" + invitePad2(d.getMonth() + 1) + "-" + invitePad2(d.getDate()) + " " +
+            invitePad2(d.getHours()) + ":" + invitePad2(d.getMinutes()) +
+            sign + invitePad2(Math.floor(abs / 60)) + ":" + invitePad2(abs % 60);
+    }
+    // 站点设置没有轻量 JSON 接口，只能读页面快照；读不到就用 1 天 / 1 次
+    // （实测站点配置正好是 invite_expiry_days=1、invite_link_max_redemptions_limit_users=1）
+    function inviteSiteSettings() {
+        try {
+            const el = document.querySelector("#data-preloaded");
+            const pre = el ? JSON.parse(el.textContent || "") : null;
+            const s = pre && pre.siteSettings;
+            return (typeof s === "string" ? JSON.parse(s) : s) || {};
+        } catch (_) { return {}; }
+    }
+    async function inviteCreate(user) {
+        // 复用 helper 现成的 getCsrf()：meta 读不到会自动去 /session/csrf.json 兜底，
+        // 比独立版"只读 meta，读不到就让你刷新页面"结实。
+        const token = await getCsrf();
+        if (!token) throw new Error("没有读取到 CSRF Token，请刷新页面后重试。");
+
+        const s = inviteSiteSettings();
+        const days = Math.max(1, Number(s.invite_expiry_days) || 1);
+        const limit = Number(user.staff ? s.invite_link_max_redemptions_limit : s.invite_link_max_redemptions_limit_users);
+        const maxRedemptions = (isFinite(limit) && limit > 0) ? Math.min(limit, user.staff ? 100 : 10) : 1;
+
+        const body = new URLSearchParams();
+        body.set("max_redemptions_allowed", String(maxRedemptions));
+        body.set("expires_at", inviteExpiresAt(days));
+        body.set("skip_email", "true");
+        body.set("domain", "");
+
+        const r = await inviteFetch("/invites", {
+            method: "POST",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-CSRF-Token": token,
+                "X-Requested-With": "XMLHttpRequest"
+            },
+            body: body.toString()
+        });
+        const rd = await inviteRead(r);
+        // 冷却中就是在这一步被拒的，服务器原文形如"请等待 71 小时后再试"，必须原样透出去
+        if (!r.ok) throw new Error(inviteErrMsg(rd.data, rd.text, r.status));
+
+        const direct = inviteUrlOf(rd.data && rd.data.link);
+        if (direct) return direct;
+        // 某些版本的响应结构不同，创建成功后再读一次待处理列表兜底
+        const back = invitePickPending(await invitePending(user.username));
+        if (back) return back;
+        throw new Error("邀请已提交，但响应里没有完整邀请链接。");
+    }
+
+    // 三级兜底：GM_setClipboard → navigator.clipboard → execCommand
+    async function inviteCopy(text) {
+        if (typeof GM_setClipboard === "function") {
+            try { GM_setClipboard(text, "text"); return; } catch (_) {}
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            try { await navigator.clipboard.writeText(text); return; } catch (_) {}
+        }
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;left:-9999px;top:0;";
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+        ta.remove();
+        if (!ok) throw new Error("浏览器拒绝写入剪贴板");
+    }
+
+    /* 「邀请」按钮的点击入口。
+     * 不受 idleSuspended 约束 —— 这是手动操作，和手动点 LDC / Agent 文字一个道理，
+     * 刷帖运行期间也随时能用。
+     * 按钮文字固定"邀请"不变（标题栏放不下"正在生成…"，会把布局撑变形），
+     * 所以进度全走 toast：点下去立刻先弹一条灰字，否则慢请求最长 20 秒里
+     * 页面上只有按钮变灰，容易以为点了没反应。 */
+    async function runInvite(btn) {
+        if (inviteBusy) return;
+        inviteBusy = true;
+        if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; btn.style.cursor = "wait"; }
+        inviteToast("正在获取邀请链接…", "info");
+        try {
+            const user = await inviteCurrentUser();
+            let link = invitePickPending(await invitePending(user.username));
+            let created = false;
+            if (!link) {
+                /* 没有未使用的待处理邀请，常见原因是旧链接已被用掉。
+                 * 这一步会真的消耗一次额度（之后约 72 小时才能再创建），
+                 * 创建是静默的、不弹确认框，所以这条灰字是仅剩的"即将扣额度"预警。 */
+                inviteToast("没有找到未使用的待处理邀请，正在检查生成资格和冷却时间…", "info");
+                link = await inviteCreate(user);
+                created = true;
+            }
+            /* 链接已经到手（created 时刚扣掉一次额度），
+             * 剪贴板写失败也绝不能把它丢掉 —— 独立版在这里会只报"浏览器拒绝写入剪贴板"，
+             * 链接直接消失，那次额度就白花了。 */
+            try {
+                await inviteCopy(link);
+                const head = created ? "已生成新的邀请链接" : "已提取未使用的待处理邀请";
+                inviteToast(head + "，并已复制到剪贴板：" + link, "success");
+            } catch (ce) {
+                inviteToast("复制到剪贴板失败，请手动复制：" + link + "（点击关闭）", "error", true);
+                console.error("[LDH] 邀请：复制失败", ce);
+            }
+        } catch (e) {
+            const msg = String((e && e.message) || e || "").replace(/\s+/g, " ").trim();
+            inviteToast(msg || "获取邀请链接失败。", "error");
+            console.error("[LDH] 邀请", e);
+        } finally {
+            inviteBusy = false;
+            if (btn) { btn.disabled = false; btn.style.opacity = "1"; btn.style.cursor = "pointer"; }
+        }
+    }
+
     function createUI() {
         if (document.getElementById("ldh_panel")) return;
         const p = document.createElement("div"); p.id = "ldh_panel";
@@ -1862,6 +2128,9 @@
             '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;min-height:20px;padding:4px 0 0 0;line-height:1.6;overflow:visible;">' +
             '<span style="font-weight:bold;font-size:10px;">⚡ LINUX DO 助手</span>' +
             '<span style="display:flex;align-items:center;">' +
+            // 1.0.6 新增：Any 左侧的「邀请」按钮。用 <button> 元素很关键 ——
+            // enableDrag 会跳过 button/a，点它不会误拖整个面板
+            '<button id="ldh_invite" style="' + smallBtnCss + 'background:#1677ff;color:#fff;" title="查询未使用的待处理邀请；没有就直接创建，并复制完整链接">邀请</button>' +
             '<button id="ldh_any" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AnyRouter">Any</button>' +
             '<span id="ldh_sync" style="cursor:pointer;font-size:9px;color:#8fe0b0;margin-left:6px;" title="同步等级进度">⟳同步</span>' +
             '<span id="ldh_min" style="cursor:pointer;margin-left:6px;font-size:12px;color:#ccc;">－</span>' +
@@ -1883,6 +2152,7 @@
         MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
         document.getElementById("ldh_sync").addEventListener("click", function () { sync(); });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
+        document.getElementById("ldh_invite").addEventListener("click", function () { runInvite(this); });
         document.getElementById("ldh_any").addEventListener("click", function () {
             // Q7：手动点击 = 清除封禁标记并重试
             if (getAnyBan(me.username)) clearAnyBan(me.username);
