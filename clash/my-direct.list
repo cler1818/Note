@@ -43,3 +43,6 @@ DOMAIN-SUFFIX,hybgzs.com
 
 # 网络剪切版
 DOMAIN-SUFFIX,webnote.cc
+
+# linuxdo论坛邀请链接
+DOMAIN,invite.linuxdo.org
