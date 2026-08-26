@@ -1,3 +1,7 @@
+whus
+selkateg
+nirtunit
+Picuivit
 Kuwhe
 Leip
 balers
@@ -31,10 +35,6 @@ loawe
 locka
 Pusnugi
 Muzempin
-whus
-selkateg
-nirtunit
-Picuivit
 cijevafe
 Liruvea
 Racugir
@@ -92,3 +92,14 @@ lser
 sonet
 uber
 fac
+ola
+bader
+raver
+hau
+
+
+buser
+humaer
+guz
+huba
+pezun
