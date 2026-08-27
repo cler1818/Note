@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.6
+// @version      1.0.8
 // @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录 + 一键获取邀请链接
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -256,11 +256,23 @@
         return String(t || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
             .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 100);
     }
+    /* Cloudflare 验证页识别（1.0.7 修）。
+     * 【实测踩坑】原来这些判断里有一个裸的 "cloudflare" 关键词，而
+     * connect.linux.do 的授权页会加载 Cloudflare Insights 探针：
+     *   <script src="https://static.cloudflareinsights.com/beacon.min.js/...">
+     * HTML 里天然就带 "cloudflare" 字样，于是【每一个正常授权页】都被误判成
+     * "被验证页拦截"，造成两个后果：
+     *   · 需要点「允许」的授权页 → 纯代码路径直接失败，白开 30 秒前台兜底标签
+     *   · 无权限的授权页        → 走不到 detectNoOauth，永远落不下无权限标志
+     * 所以关键词必须限定到真正的挑战页特征。注意 cf[-_]chl 两种写法都要覆盖
+     * (cf-chl 和 __cf_chl)，challenges.cloudflare.com 是 Turnstile 的 iframe 域名，
+     * 和 static.cloudflareinsights.com 不是一回事。 */
+    const CF_CHALLENGE_RE = /just a moment|cf[-_]chl|cf-browser-verification|attention required|verify you are human|checking if the site connection|challenges\.cloudflare\.com|cdn-cgi\/challenge/i;
     // 把"返回非JSON"细分成可判断的原因，否则验证页/登录页/网关错误全都长一个样
     function arNonJsonError(r, url) {
         const text = String(r.responseText || ""), status = Number(r.status) || 0;
         const preview = arBodyPreview(text), finalUrl = String(r.finalUrl || url || "");
-        if (/just a moment|cf-chl|cloudflare|attention required|verify you are human/i.test(text)) {
+        if (CF_CHALLENGE_RE.test(text)) {
             const e = new Error("被验证页拦截"); e.cf = true; return e;
         }
         if (/bad gateway|service unavailable|gateway timeout|upstream/i.test(text) || [502, 503, 504].indexOf(status) >= 0) {
@@ -398,6 +410,112 @@
     function currentLdUser() { return normUser(gmGet(LD_USER_KEY, "")); }
 
     /* ============================================================
+     * 永久无 OAuth 权限标志（1.0.7 新增）
+     *
+     * 背景（实测 2026-08-23，env101-104）：
+     *   新注册的号在 connect 授权页会被直接拒绝，页面返回 HTTP 200，
+     *   正文里有 <div class="alert-box alert-danger">你所在的用户组无法使用</div>，
+     *   并且没有「允许」链接。三个应用(Credit/AgentRouter/AnyRouter)共用同一个
+     *   授权页，所以拒绝与 client_id 无关 —— 一个标志就能锁死三个。
+     *
+     * 不加这个标志的代价（实测）：每开一次论坛，
+     *   LDC  纯代码失败 → 开前台标签抢焦点干等 30 秒
+     *   Agent 纯代码失败 → 开前台标签抢焦点干等 30 秒
+     * 而且两者都只在【成功】时才写当天缓存，所以每次开论坛都会重跑一遍。
+     *
+     * 判定用三重条件，少一条都不判（见 detectNoOauth）。最关键的是第二条：
+     * 拒绝页里仍然写着「以 @用户名 的身份授权」，证明登录态是好的 ——
+     * 没有这一条，Cookie 过期那一刻就会被误判成永久无权限，
+     * 而标志是【一次命中即永久】且面板上什么都不显示，误判了不会被发现。
+     *
+     * 解锁：只有手动点标题栏 ⟳ 才会清标志重试（retryOauth）。
+     * 不做 trust_level 复检 —— 按需求，这类号升级也拿不到权限。
+     * ============================================================ */
+    const NO_OAUTH_PREFIX = "ldh_no_oauth_";
+    const NO_OAUTH_TEXT = "你所在的用户组无法使用";
+    const NO_OAUTH_MSG = "该账号所在用户组无法使用 OAuth 授权";
+    function noOauthKey(u) { return NO_OAUTH_PREFIX + normUser(u); }
+    let _noOauthCache = { key: "", at: 0, v: null };
+    /* 和 readTL3 / getAnyBan 一样做 3 秒内存缓存：
+     * render() 里每次都要问「锁了没」，而刷帖时 render 每秒跑一遍，
+     * 直接读 GM 存储的话 500 分钟挂机会产生上万次同步读。 */
+    function getNoOauth(u) {
+        const name = normUser(u);
+        if (!name) return null;               // 没登录时绝不判定，否则会锁到 unknown 上
+        const key = noOauthKey(name);
+        if (_noOauthCache.key === key && Date.now() - _noOauthCache.at < 3000) return _noOauthCache.v;
+        let v = null;
+        try { const j = JSON.parse(gmGet(key, "null")); v = (j && j.locked) ? j : null; } catch (_) { v = null; }
+        _noOauthCache = { key: key, at: Date.now(), v: v };
+        return v;
+    }
+    // from 只用于事后排查是哪条路径先撞上的，不参与任何判断
+    /* from 只用于事后排查是哪条路径先撞上的，不参与任何判断。
+     * tl 必须由调用方传进来，绝不能在这里读 me.trustLevel ——
+     * connect.linux.do 分支在 `let me` 之前就执行了，读它会踩 TDZ
+     * 抛 "Cannot access 'me' before initialization"，把整个分支打挂。 */
+    function saveNoOauth(u, from, tl) {
+        const name = normUser(u);
+        if (!name) return;                    // 同上：没有用户名就不写，避免误锁
+        gmSet(noOauthKey(name), JSON.stringify({
+            locked: true, from: from || "", tl: (typeof tl === "number" ? tl : null), at: Date.now()
+        }));
+        _noOauthCache = { key: "", at: 0, v: null };
+        console.warn("[LDH] @" + name + " 无 OAuth 权限，已永久停用 LDC/Agent/Any（来源:" + (from || "?") + "）");
+    }
+    function clearNoOauth(u) {
+        const name = normUser(u);
+        if (!name) return;
+        gmDel(noOauthKey(name));
+        _noOauthCache = { key: "", at: 0, v: null };
+    }
+    function noOauthError() { const e = new Error(NO_OAUTH_MSG); e.noOauth = true; return e; }
+
+    /* ---- 活 DOM 版判定（connect.linux.do 授权页上用）----
+     * 和 detectNoOauth 的区别：那个吃 HTML 字符串(GM 请求回来的)，
+     * 这个直接读当前页面的 DOM。选择器和文案两者一致。 */
+    function deniedBoxText(root) {
+        const boxes = (root || document).querySelectorAll(".alert-box.alert-danger");
+        for (let i = 0; i < boxes.length; i++) {
+            const t = String(boxes[i].textContent || "").replace(/\s+/g, "");
+            if (t.indexOf(NO_OAUTH_TEXT) >= 0) return t;
+        }
+        return "";
+    }
+    /* 从授权页正文里取"以 @用户名 的身份授权"中的用户名。
+     * 这是【真正被拒的那个账号】，比 currentLdUser() 的跨站缓存可靠。 */
+    function authorizedUserFromPage() {
+        const el = document.body;
+        if (!el) return "";
+        const body = String(el.innerText || el.textContent || "").replace(/\s+/g, " ");
+        const m = body.match(/以\s*@([A-Za-z0-9_.\-]+)\s*的身份授权/);
+        return m ? normUser(m[1]) : "";
+    }
+
+    /* 三重条件判定授权页是不是「用户组无权限」。
+     * 任何一条不满足都返回 false —— 宁可漏报(白跑一次)，绝不误报(永久废掉好号)。 */
+    function detectNoOauth(html) {
+        const s = String(html || "");
+        if (s.indexOf(NO_OAUTH_TEXT) < 0) return false;      // 快速否定，省掉解析
+        let doc = null;
+        try { doc = new DOMParser().parseFromString(s, "text/html"); } catch (_) { return false; }
+        if (!doc || !doc.body) return false;
+        // 条件2：仍显示「以 @用户名 的身份授权」→ 登录态正常。
+        // 这条是把「登录失效」挡在外面的唯一锚点，绝不能省。
+        const body = String(doc.body.textContent || "").replace(/\s+/g, " ");
+        if (!/以\s*@[A-Za-z0-9_.\-]+\s*的身份授权/.test(body)) return false;
+        // 条件3：确实没有「允许」链接（有的话说明本来就能授权）
+        if (doc.querySelector('a[href^="/oauth2/approve/"]')) return false;
+        // 条件1：拒绝文案挂在 alert-box alert-danger 上（不是全文随便匹配）
+        const boxes = doc.querySelectorAll(".alert-box.alert-danger");
+        for (let i = 0; i < boxes.length; i++) {
+            if (String(boxes[i].textContent || "").replace(/\s+/g, "").indexOf(NO_OAUTH_TEXT) >= 0) return true;
+        }
+        return false;
+    }
+
+
+    /* ============================================================
      * AgentRouter：纯代码 OAuth
      * ============================================================ */
     function paramsFrom(u) { try { const x = new URL(u); const c = x.searchParams.get("code"), s = x.searchParams.get("state"); if (c && s) return { code: c, state: s }; } catch (_) {} return null; }
@@ -423,9 +541,12 @@
         const a = await gmFetch(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(state), {
             userHeader: false, headers: { "Accept": "text/html,application/xhtml+xml" }
         });
-        if (a.status >= 400 || /just a moment|cf-chl|cloudflare|attention required/i.test(a.responseText || "")) throw arNonJsonError(a, a.finalUrl);
+        if (a.status >= 400 || CF_CHALLENGE_RE.test(a.responseText || "")) throw arNonJsonError(a, a.finalUrl);
         let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
         if (!cs) {
+            // 1.0.7：先分辨「用户组无权限」。原来这里一律报"登录态可能失效"，
+            // 把永久无权限误说成登录问题，然后还要白开一个 30 秒的兜底标签。
+            if (detectNoOauth(a.responseText)) throw noOauthError();
             const ap = parseApprove(a.responseText);
             if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
             say("点击允许…");
@@ -517,6 +638,9 @@
         try { return await arOAuth(say, true); }
         catch (e) {
             const msg = (e && e.message) || String(e);
+            // 1.0.7：用户组无权限时开兜底标签也一定被同一个授权页拒掉，
+            // 只会白抢一次焦点再干等 30 秒。直接把错误抛上去让调用方落标志。
+            if (e && e.noOauth) throw e;
             say("纯代码失败:" + msg);
             // 前台标签会抢焦点，同一时刻只允许一个标签开（手动触发不受限）
             if (!manualTrigger && !acquireTabLock()) throw new Error(msg + " / 另一个标签正在授权");
@@ -721,6 +845,7 @@
                     if (location.pathname.indexOf("/console") !== 0) location.replace(ANY.HOST + "/console");
                     return;
                 }
+                if (getNoOauth(LD_U)) { console.warn("[LDH] 无 OAuth 权限，跳过 AnyRouter 自动登录"); gmDel(ANY.FLOW); return; }
                 if (getAnyBan(LD_U)) { console.warn("[LDH] AnyRouter 已封禁，跳过自动登录"); gmDel(ANY.FLOW); return; }
                 gmSet(ANY.FLOW, JSON.stringify({ step: "authorizing", ts: Date.now() }));
                 await anyStartOAuth();
@@ -728,6 +853,7 @@
         } else if (isEntryPath()) {
             (async function () {
                 if (await siteLoggedIn()) { clearAnyBan(LD_U); return; }
+                if (getNoOauth(LD_U)) { console.warn("[LDH] 无 OAuth 权限，跳过 AnyRouter 自动登录"); return; }
                 if (getAnyBan(LD_U)) { console.warn("[LDH] AnyRouter 已封禁，跳过自动登录"); return; }
                 if (!autoLoginAllowed(ANY.AUTOKEY)) return;
                 markAutoLogin(ANY.AUTOKEY);
@@ -805,7 +931,46 @@
         if (location.pathname === "/oauth2/authorize") {
             // 只对白名单里的三个应用自动点「允许」；其它应用一律不碰，由你自己决定
             const cid = new URLSearchParams(location.search).get("client_id") || "";
-            if (clientAllowed(cid)) {
+
+            /* ---- 1.0.8：在授权页【实地读活 DOM】判定"用户组无权限" ----
+             * 这是主判定点，GM 请求那条路只当兜底。原因是实测发现：
+             *   · GM_xmlhttpRequest 在【扩展后台】发出，不共享本环境的代理/会话，
+             *     它拿到的响应和页面里 fetch 到的不是一回事；
+             *   · Agent 那条路更早就断了 —— agentrouter.org 的 /api/oauth/state
+             *     返回非 JSON(CF 挑战页)，gmJson 直接抛"被验证页拦截"，
+             *     流程压根走不到 connect，detectNoOauth 永远没机会执行；
+             *   · 而 anyrouter / agentrouter 的自动登录是【真实页面跳转】，
+             *     最终就落在这个页面上 —— 也就是你手动打开看到报错的那个 URL。
+             * 在这里读 DOM，看到的和你眼睛看到的完全一致，绕开整个 GM 层。
+             *
+             * 账号名优先从页面上"以 @xxx 的身份授权"取 —— 那是【真正被拒的那个号】，
+             * 比 currentLdUser() 里跨站共享的缓存值准确。 */
+            const markDeniedHere = function () {
+                if (!deniedBoxText()) return false;
+                const who = authorizedUserFromPage() || currentLdUser();
+                if (!who) {
+                    // 拿不到用户名就绝不写标志，否则会锁到 unknown 上
+                    console.warn("[LDH] 授权页显示无权限，但读不到账号名，未落标志");
+                    return true;
+                }
+                if (!getNoOauth(who)) saveNoOauth(who, "connect-page");
+                return true;
+            };
+            if (markDeniedHere()) return;      // 已确认无权限：不再等那个不存在的「允许」链接
+
+            /* 页面偶发晚渲染时观察一小会儿。observer 只做落标志，
+             * 不影响下面的自动点「允许」—— 两者互斥，命中就没有允许链接可点。 */
+            let denyDone = false;
+            const denyOb = new MutationObserver(function () {
+                if (denyDone) return;
+                if (markDeniedHere()) { denyDone = true; try { denyOb.disconnect(); } catch (_) {} }
+            });
+            try { denyOb.observe(document.documentElement, { childList: true, subtree: true, characterData: true }); } catch (_) {}
+            setTimeout(function () { denyDone = true; try { denyOb.disconnect(); } catch (_) {} }, 15000);
+
+            /* 1.0.7：无 OAuth 权限的号，授权页上压根没有「允许」链接，
+             * waitAndClick 会白白轮询满 30 秒才超时退出。直接不进这个分支。 */
+            if (clientAllowed(cid) && !getNoOauth(currentLdUser())) {
                 // 后台标签(hidden)里 getClientRects() 恒为 0，不能拿"看不见"当不点的理由
                 const bg = document.visibilityState === "hidden";
                 waitAndClick(function () {
@@ -957,12 +1122,15 @@
             "&response_type=code&scope=" + encodeURIComponent(CREDIT.SCOPE) +
             "&state=" + encodeURIComponent(st);
         const a = await gmFetch(authUrl, { headers: { "Accept": "text/html,application/xhtml+xml" }, timeout: 15000 });
-        if (a.status >= 400 || /just a moment|cf-chl|cloudflare|attention required/i.test(a.responseText || "")) {
+        if (a.status >= 400 || CF_CHALLENGE_RE.test(a.responseText || "")) {
             throw arNonJsonError(a, a.finalUrl);
         }
         // 之前授权过的话，授权页会直接 302 带回 code；否则要再点一次"允许"
         let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
         if (!cs) {
+            // 1.0.7：先分辨「用户组无权限」。原来这里一律报"登录态可能失效"，
+            // 把永久无权限误说成登录问题，然后还要白开一个 30 秒的兜底标签。
+            if (detectNoOauth(a.responseText)) throw noOauthError();
             const ap = parseApprove(a.responseText);
             if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
             const approved = await gmFetch(new URL(ap, CONNECT_HOST).href, {
@@ -1010,6 +1178,9 @@
         if (idleSuspended && !manual) return;    // 刷帖期间不发任何 Credit 请求
         const u = me.username;
         if (!u) return;
+        // 1.0.7：已判定无 OAuth 权限 → 一个请求都不发。
+        // manual(点⟳恢复)时不受此限，由 retryOauth 先清标志再进来。
+        if (!manual && getNoOauth(u)) { ldc = { state: "nooauth", value: "", msg: NO_OAUTH_MSG }; return; }
 
         if (!manual) {
             const cache = readCreditCache(u);
@@ -1024,6 +1195,13 @@
             // 未登录 → 先试纯代码
             try { info = await creditCodeLogin(); }
             catch (e2) {
+                /* 1.0.7：用户组无权限 —— 落永久标志并立刻收手。
+                 * 开前台标签也是同一个授权页，照样被拒，只会白抢焦点干等 30 秒。 */
+                if (e2 && e2.noOauth) {
+                    saveNoOauth(u, "credit", me.trustLevel);
+                    ldc = { state: "nooauth", value: "", msg: NO_OAUTH_MSG };
+                    render(); return;
+                }
                 // 纯代码也不行 → 前台标签兜底。没登录论坛时开了也是白开
                 if (!me.username) { ldc = { state: "fail", value: "", msg: "未登录 LINUX DO" }; render(); return; }
                 if (!manual && !acquireTabLock()) {
@@ -1096,7 +1274,7 @@
             headers: { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Referer": "https://connect.linux.do/", "User-Agent": navigator.userAgent },
             onload: function (resp) {
                 const html = resp.responseText || "";
-                if (/just a moment|__cf_chl|cf-browser-verification|attention required/i.test(html) && !/tl3-ring|empty-state/.test(html)) { onFail("cf"); return; }
+                if (CF_CHALLENGE_RE.test(html) && !/tl3-ring|empty-state/.test(html)) { onFail("cf"); return; }
                 let doc; try { doc = new DOMParser().parseFromString(html, "text/html"); } catch (_) { onFail("err"); return; }
                 const data = parseConnectRoot(doc);
                 if (data && storeTL3(data, me.username)) { _tl3Cache = { key: "", at: 0, v: null }; syncAt = Date.now(); syncState = readTL3() ? "ok" : "otheruser"; render(); }
@@ -1131,7 +1309,37 @@
             else if (n > 14) { clearInterval(iv); try { if (handle.close) handle.close(); } catch (_) {} syncState = "empty"; render(); }
         }, 1500);
     }
+    /* ---- 无 OAuth 权限的手动恢复（1.0.7）----
+     * 标志是一次命中即永久、且面板上什么都不显示，所以必须留一个人能走的恢复入口。
+     * 挂在标题栏 ⟳ 上：先清标志，再强制跑一遍 LDC 和 Agent。
+     *   成功  → 标志不会被重新写上，以后永久正常显示
+     *   仍被拒 → 两条路径各自把标志重新落上，这里弹红字 toast 告诉你结果
+     * oauthRetrying 期间 ldcSpan/arSpan 会临时把两段显示出来（"获取中"），
+     * 否则整段隐藏会让你完全看不出点了 ⟳ 有没有反应。 */
+    let oauthRetrying = false;
+    async function retryOauth() {
+        const u = me.username;
+        if (!u || oauthRetrying) return;
+        oauthRetrying = true;
+        clearNoOauth(u);
+        ldc = { state: "loading", value: "", msg: "重新检查授权权限…" };
+        arState = "running"; arText = "重新检查授权权限…"; arBal = "";
+        render();
+        try { await refreshCredit(true); } catch (_) {}
+        try { await runArCheckin(true); } catch (_) {}
+        oauthRetrying = false;
+        if (getNoOauth(u)) {
+            ldhToast(NO_OAUTH_MSG + "，LDC / Agent / Any 保持停用。", "error");
+        } else {
+            ldhToast("授权权限已恢复，LDC / Agent / Any 重新启用。", "success");
+        }
+        render();
+    }
     function sync() {
+        /* 1.0.8 修：这里【绝不能】调 retryOauth。
+         * sync() 不区分来源，而 createUI 的自动等级同步也会调它 ——
+         * 那样每次打开论坛都会 clearNoOauth() 把永久标志清掉再强制重试一遍，
+         * 「永久停用」就完全失效了。手动恢复入口只挂在 ⟳ 的 click 监听上。 */
         // Q9=b：TL0/1 时 ⟳ 改成刷新 summary.json
         if (isLowTL()) { loadSummary(); return; }
         if (syncState === "syncing" || syncState === "opening") return;
@@ -1228,7 +1436,7 @@
     }
     function classify(status, body, ra, ct) {
         if (status >= 200 && status < 300) return "ok";
-        if (/just a moment|cf-browser-verification|__cf_chl|attention required|cloudflare/i.test(body || "")) return "cloudflare";
+        if (CF_CHALLENGE_RE.test(body || "")) return "cloudflare";
         if (status === 429) { const hw = /^\d+(\.\d+)?$/.test((ra || "").trim()) ? Number(ra) : 0; let bw = 0; try { bw = Number(JSON.parse(body).extras.wait_seconds) || 0; } catch (_) {} return (hw >= COMMON.HARD_BLOCK_RETRY_THRESHOLD || /slow down/i.test(body || "") || (Math.max(hw, bw) === 0 && /text\/plain/i.test(ct || ""))) ? "discourse_hard" : "discourse_soft"; }
         if (status >= 500) return "server_error";
         return "other";
@@ -1446,8 +1654,16 @@
      * 手动点 R1 的 Agent 文字 = force，强制重签 + 刷新余额，不受任何限制。
      * ============================================================ */
     function runArCheckin(force) {
-        if (arState === "running") return;
-        if (idleSuspended && !force) return;       // 刷帖期间不跑签到
+        if (arState === "running") return Promise.resolve();
+        if (idleSuspended && !force) return Promise.resolve();       // 刷帖期间不跑签到
+        /* 1.0.7：已判定无 OAuth 权限 → 一个请求都不发。
+         * 注意这里连 arCheckin 开头那次 /api/user/logout 都省掉了 ——
+         * 那次退出登录是为重新授权做准备的，既然授权必被拒，就没有任何意义。
+         * force(点⟳恢复)时不受此限，由 retryOauth 先清标志再进来。 */
+        if (!force && getNoOauth(me.username)) {
+            arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
+            return Promise.resolve();
+        }
         const today = todayStr();
         const signedToday = gmGet(AR.DAYKEY, "") === today;
         const balToday = gmGet(AR.BALDAY, "") === today;
@@ -1457,13 +1673,13 @@
             const saved = loadArNote();
             if (saved && saved.bal) { arState = saved.state; arText = saved.text; arBal = saved.bal; }
             else { arState = "ok"; arText = "签到成功"; arBal = gmGet(AR.BALKEY, "") || ""; }
-            render(); return;
+            render(); return Promise.resolve();
         }
 
         if (!force && signedToday) {
             // 今天已签到，只是余额没读到 —— 只补查余额，绝不重复签到
             arState = "running"; arText = "读取余额中…"; arBal = ""; render();
-            arBalance(null, { retries: 3 }).then(function (bal) {
+            return arBalance(null, { retries: 3 }).then(function (bal) {
                 arState = "ok"; arText = "签到成功"; arBal = bal;
                 gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
@@ -1475,12 +1691,11 @@
                 saveArNote("pending", arText, "");
                 render();
             });
-            return;
         }
 
         arState = "running"; arText = "签到中…"; arBal = ""; render();
         // 内部进度(退出登录/获取state/…)只进 arText 供 tooltip 用，面板固定显示"签到中…"
-        arCheckin(function (s) { arText = s; }, force).then(function (r) {
+        return arCheckin(function (s) { arText = s; }, force).then(function (r) {
             // 签到这一步已经成功，先把它锁住，后面余额失败也不用重签
             gmSet(AR.DAYKEY, today);
             /* 关键：GM 请求完成 OAuth 回调后，Set-Cookie 写进浏览器还需要一点时间。
@@ -1497,6 +1712,13 @@
                 render();
             });
         }).catch(function (e) {
+            /* 1.0.7：用户组无权限 —— 落永久标志。
+             * 不写 arNote：那份笔记是给"失败原因"用的，而这不是故障，是这个号就没权限。 */
+            if (e && e.noOauth) {
+                saveNoOauth(me.username, "agentrouter", me.trustLevel);
+                arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
+                render(); return;
+            }
             arState = "fail"; arText = (e && e.message) || String(e); arBal = "";
             saveArNote("fail", arText, "");
             render();
@@ -1505,6 +1727,8 @@
     // 在 AgentRouter 标签页手动登录后回写的余额：切回论坛时取一次，只覆盖余额
     function pullSideBalance() {
         if (idleSuspended) return;
+        if (getNoOauth(me.username)) return;   // 1.0.7：锁上后不可能有余额回写
+
         try {
             const v = JSON.parse(gmGet(AR.SIDEKEY, "null"));
             if (!v || !v.bal) return;
@@ -1588,6 +1812,13 @@
     function ldcSpan() {
         if (!me.username) return "";
         const base = '<span id="ldh_ldc" style="cursor:pointer;';
+        /* 1.0.7：无 OAuth 权限 → 红色「失败」，和普通失败同色同字，原因放 tooltip。
+         * 不做整段隐藏：面板上凭空少两段，反而会让人以为脚本没跑起来。
+         * 这里直接问标志而不是看 ldc.state —— 状态可能被别处覆盖成残留值，
+         * 而标志是权威的。retryOauth 期间放行，好让你看见"获取中"。 */
+        if (!oauthRetrying && getNoOauth(me.username)) {
+            return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "，已停止请求。点标题栏 ⟳ 可强制重试一次") + '">' + SP3 + "LDC：失败</span>";
+        }
         if (ldc.state === "ok") {
             return base + 'color:#8fe0b0;" title="' + esc(ldc.msg || "可用 LINUX DO Credits，点击刷新") + '">' + SP3 + "LDC：" + esc(ldc.value) + "</span>";
         }
@@ -1604,6 +1835,9 @@
     function arSpan() {
         if (!me.username) return "";
         const base = '<span id="ldh_arbal" style="cursor:pointer;';
+        if (!oauthRetrying && getNoOauth(me.username)) {          // 同 ldcSpan
+            return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "，已停止请求。点标题栏 ⟳ 可强制重试一次") + '">' + SP3 + "Agent：失败</span>";
+        }
         if (arState === "running") return base + 'color:#e0c060;" title="' + esc(arText || "签到中") + '">' + SP3 + "Agent：获取中</span>";
         if (arState === "pending") return base + 'color:#e0c060;" title="' + esc(arText || "签到已成功，余额读取失败，点击重试") + '">' + SP3 + "Agent：待刷新</span>";
         if (arState === "fail") return base + 'color:#ff8a8a;" title="' + esc(arText || "签到失败") + '">' + SP3 + "Agent：失败</span>";
@@ -1677,6 +1911,13 @@
         } else {
             r1.innerHTML = nameHtml + tlBadge() + ldcSpan() + arSpan() +
                 '<span id="ldh_timer" style="float:right;color:#8fe0b0;margin-left:8px;">' + timer + "</span>";
+            /* 1.0.7：给 autorun.py 用的隐藏标记。面板整段不显示之后，
+             * 靠"r1 里没有 LDC 字样"推断无权限会把【渲染还没完成】的正常环境误判掉，
+             * 白跳过 WAIT_SIGNIN 那 60 秒签到等待。所以给一个明确属性，
+             * 有=确定无权限，没有=一律按正常环境处理。
+             * 只在非运行期写：刷帖期间 OAuth 全停，锁状态不可能变化。 */
+            if (getNoOauth(me.username)) r1.setAttribute("data-nooauth", "1");
+            else r1.removeAttribute("data-nooauth");
             // r1 每次都由 innerHTML 重建，旧节点连同监听一起丢弃，这里必须重新绑定
             const bindLdc = document.getElementById("ldh_ldc");
             if (bindLdc) bindLdc.addEventListener("click", function () { refreshCredit(true); });
@@ -1724,7 +1965,8 @@
                 sy.style.color = (failed && !hasData) ? "#ff8a8a" : "#8fe0b0";
             }
         }
-        // 封禁时 Any 按钮变红
+        // 封禁时 Any 按钮变红。无 OAuth 权限时按钮外观保持不变（按需求）——
+        // 但 anyrouter 分支里仍有守卫，不会真去跑那条注定被拒的授权流程。
         const nb = document.getElementById("ldh_any");
         if (nb) {
             const ban = getAnyBan(me.username);
@@ -1864,12 +2106,13 @@
      * ============================================================ */
     const INVITE = {
         TIMEOUT_MS: 20000,
-        TOAST_ID: "ldh_invite_toast",
         URL_RE: /^https:\/\/linux\.do\/invites\/[A-Za-z0-9_-]+(?:[/?#].*)?$/i,
         NOT_LOGIN: "尚未登录 Linux.do，请登录后再试。",
         NO_PERM: "无邀请权限，当前账号不能获取邀请链接。"
     };
-    let inviteBusy = false, inviteToastTimer = null;
+    // 1.0.7：toast 不再是邀请功能专属，retryOauth 也用它报恢复结果，所以提到外面
+    const LDH_TOAST_ID = "ldh_toast";
+    let inviteBusy = false, ldhToastTimer = null;
 
     /* toast：底部居中，z-index 盖在面板(999999)之上。
      * 全内联样式、不用 GM_addStyle —— 少要一个 @grant。
@@ -1878,12 +2121,12 @@
      * sticky=true 的那条永不自动消失：拿到链接但复制失败时用，
      * 链接绝不能因为 15 秒到点就消失 —— 那可能是刚扣掉额度换来的。
      * 三类 toast 都能点一下提前关掉。 */
-    function inviteToast(msg, type, sticky) {
-        let box = document.getElementById(INVITE.TOAST_ID);
+    function ldhToast(msg, type, sticky) {
+        let box = document.getElementById(LDH_TOAST_ID);
         if (!box) {
             box = document.createElement("div");
-            box.id = INVITE.TOAST_ID;
-            box.addEventListener("click", function () { inviteToastHide(); });
+            box.id = LDH_TOAST_ID;
+            box.addEventListener("click", function () { ldhToastHide(); });
             document.body.appendChild(box);
         }
         const bg = type === "error" ? "#c62828" : type === "info" ? "#4a5568" : "#16883d";
@@ -1894,12 +2137,12 @@
             "text-align:center;overflow-wrap:anywhere;cursor:pointer;";
         box.textContent = msg;
         box.hidden = false;
-        if (inviteToastTimer) { clearTimeout(inviteToastTimer); inviteToastTimer = null; }
-        if (!sticky) inviteToastTimer = setTimeout(inviteToastHide, type === "error" ? 15000 : 9000);
+        if (ldhToastTimer) { clearTimeout(ldhToastTimer); ldhToastTimer = null; }
+        if (!sticky) ldhToastTimer = setTimeout(ldhToastHide, type === "error" ? 15000 : 9000);
     }
-    function inviteToastHide() {
-        if (inviteToastTimer) { clearTimeout(inviteToastTimer); inviteToastTimer = null; }
-        const box = document.getElementById(INVITE.TOAST_ID);
+    function ldhToastHide() {
+        if (ldhToastTimer) { clearTimeout(ldhToastTimer); ldhToastTimer = null; }
+        const box = document.getElementById(LDH_TOAST_ID);
         if (box) box.hidden = true;
     }
 
@@ -2080,7 +2323,7 @@
         if (inviteBusy) return;
         inviteBusy = true;
         if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; btn.style.cursor = "wait"; }
-        inviteToast("正在获取邀请链接…", "info");
+        ldhToast("正在获取邀请链接…", "info");
         try {
             const user = await inviteCurrentUser();
             let link = invitePickPending(await invitePending(user.username));
@@ -2089,7 +2332,7 @@
                 /* 没有未使用的待处理邀请，常见原因是旧链接已被用掉。
                  * 这一步会真的消耗一次额度（之后约 72 小时才能再创建），
                  * 创建是静默的、不弹确认框，所以这条灰字是仅剩的"即将扣额度"预警。 */
-                inviteToast("没有找到未使用的待处理邀请，正在检查生成资格和冷却时间…", "info");
+                ldhToast("没有找到未使用的待处理邀请，正在检查生成资格和冷却时间…", "info");
                 link = await inviteCreate(user);
                 created = true;
             }
@@ -2099,14 +2342,14 @@
             try {
                 await inviteCopy(link);
                 const head = created ? "已生成新的邀请链接" : "已提取未使用的待处理邀请";
-                inviteToast(head + "，并已复制到剪贴板：" + link, "success");
+                ldhToast(head + "，并已复制到剪贴板：" + link, "success");
             } catch (ce) {
-                inviteToast("复制到剪贴板失败，请手动复制：" + link + "（点击关闭）", "error", true);
+                ldhToast("复制到剪贴板失败，请手动复制：" + link + "（点击关闭）", "error", true);
                 console.error("[LDH] 邀请：复制失败", ce);
             }
         } catch (e) {
             const msg = String((e && e.message) || e || "").replace(/\s+/g, " ").trim();
-            inviteToast(msg || "获取邀请链接失败。", "error");
+            ldhToast(msg || "获取邀请链接失败。", "error");
             console.error("[LDH] 邀请", e);
         } finally {
             inviteBusy = false;
@@ -2150,10 +2393,19 @@
             '</div>';
         document.body.appendChild(p);
         MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
-        document.getElementById("ldh_sync").addEventListener("click", function () { sync(); });
+        document.getElementById("ldh_sync").addEventListener("click", function () {
+            // 手动恢复入口只在这里 —— 自动同步走的是 sync()，不碰标志
+            if (getNoOauth(me.username)) retryOauth();
+            sync();
+        });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
         document.getElementById("ldh_invite").addEventListener("click", function () { runInvite(this); });
         document.getElementById("ldh_any").addEventListener("click", function () {
+            // 1.0.8：无 OAuth 权限时点 Any 也是白开标签 —— 授权页必然拒绝
+            if (getNoOauth(me.username)) {
+                ldhToast(NO_OAUTH_MSG + "，AnyRouter 登录必然被拒。点 ⟳ 可强制重试一次。", "error");
+                return;
+            }
             // Q7：手动点击 = 清除封禁标记并重试
             if (getAnyBan(me.username)) clearAnyBan(me.username);
             anyState = "running"; render(); anyOpenTab();
