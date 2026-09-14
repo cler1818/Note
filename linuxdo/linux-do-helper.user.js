@@ -20,6 +20,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @grant        GM_setClipboard
+// @grant        unsafeWindow
 // @connect      linux.do
 // @connect      connect.linux.do
 // @connect      credit.linux.do
@@ -774,24 +775,107 @@
                 gmSet(ANY.FLOW, JSON.stringify({ step: "authorizing", ts: Date.now() }));
                 await anyStartOAuth();
             })();
-        } else if (isEntryPath()) {
+        } else if (anyIsEntryPath()) {
             (async function () {
-                if (await siteLoggedIn()) { clearAnyBan(LD_U); return; }
+                const loginPage = /^\/login\/?$/.test(location.pathname);
+                if (await siteLoggedIn()) {
+                    clearAnyBan(LD_U);
+                    if (loginPage) location.replace(ANY.HOST + "/console");
+                    return;
+                }
                 if (getNoOauth(LD_U)) { console.warn("[LDH] 无 OAuth 权限，跳过 AnyRouter 自动登录"); return; }
                 if (getAnyBan(LD_U)) { console.warn("[LDH] AnyRouter 已封禁，跳过自动登录"); return; }
-                if (!autoLoginAllowed(ANY.AUTOKEY)) return;
+                // A direct /login visit must work even after another browser session logged in recently.
+                if (!loginPage && !autoLoginAllowed(ANY.AUTOKEY)) return;
+                if (!anyEntryAttemptAllowed()) return;
                 markAutoLogin(ANY.AUTOKEY);
-
-                const close = Array.prototype.slice.call(document.querySelectorAll("button")).find(function (b) { return normText(b) === "关闭公告" && b.getClientRects().length; })
-                           || document.querySelector('button[aria-label="close"]');
-                if (close && close.getClientRects().length) { try { close.click(); } catch (_) {} }
-                const clicked = await waitAndClick(findLdLoginBtn, 2000);
-                if (clicked) return;
-                await anyStartOAuth();
+                await anyClickLoginButton();
             })();
         }
         return;
     }
+
+
+    // LDH_ANY_ENTRY_20260915: direct login, delayed announcement dismissal and bounded retries.
+    function anyIsEntryPath() { return isEntryPath() || location.pathname === "/login/"; }
+    function anyEntryAttemptAllowed() {
+        try {
+            const key = "ldh_any_entry_attempts", now = Date.now();
+            let record = JSON.parse(sessionStorage.getItem(key) || "null");
+            if (!record || now - Number(record.start || 0) >= 60000) record = { start: now, count: 0 };
+            if (Number(record.count || 0) >= 3) {
+                console.warn("[LDH] AnyRouter 连续授权未成功，暂停自动重试一分钟");
+                return false;
+            }
+            record.count = Number(record.count || 0) + 1;
+            sessionStorage.setItem(key, JSON.stringify(record));
+        } catch (_) {}
+        return true;
+    }
+    async function anyClickLoginButton() {
+        if (location.hostname !== "anyrouter.top" || !anyIsEntryPath()) return;
+        const page = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+        const originalOpen = page.open, dismissed = new WeakSet();
+        let installedOpen = null, forwarded = false, leaving = false, readySince = 0;
+        function restore() {
+            leaving = true;
+            if (installedOpen && page.open === installedOpen) page.open = originalOpen;
+        }
+        function openForLogin(url) {
+            let target = null;
+            try { target = new URL(String(url), location.href); } catch (_) {}
+            if (target && target.origin === CONNECT_HOST && target.pathname === "/oauth2/authorize" &&
+                target.searchParams.get("response_type") === "code" &&
+                target.searchParams.get("client_id") === ANY.CLIENT_ID && target.searchParams.get("state")) {
+                forwarded = true;
+                location.assign(target.href);
+                return null;
+            }
+            return originalOpen.apply(page, arguments);
+        }
+        function visible(el) {
+            if (!el || !el.getClientRects().length) return false;
+            const style = window.getComputedStyle(el);
+            return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+        }
+        function findReadyButton() {
+            let announcement = false;
+            const dialogs = document.querySelectorAll('[role="dialog"]');
+            for (let i = 0; i < dialogs.length; i++) {
+                const dialog = dialogs[i];
+                if (!visible(dialog) || !/系统公告|system announcement/i.test(normText(dialog).slice(0,100))) continue;
+                announcement = true;
+                const close = Array.prototype.slice.call(dialog.querySelectorAll("button")).find(function (b) {
+                    return /^(关闭公告|close announcement)$/i.test(normText(b)) && visible(b) && !b.disabled;
+                });
+                if (close && !dismissed.has(close)) { dismissed.add(close); close.click(); }
+            }
+            if (announcement) { readySince = 0; return null; }
+            const button = findLdLoginBtn();
+            if (!visible(button) || button.disabled || button.getAttribute("aria-disabled") === "true") { readySince = 0; return null; }
+            const r = button.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            if (!hit || !button.contains(hit)) { readySince = 0; return null; }
+            if (!readySince) readySince = Date.now();
+            return Date.now() - readySince >= 600 ? button : null;
+        }
+        try {
+            page.open = openForLogin;
+            installedOpen = page.open;
+            if (installedOpen === originalOpen) { await anyStartOAuth(); return; }
+            window.addEventListener("pagehide", restore, { once: true });
+            const clicked = await waitAndClick(findReadyButton, 12000);
+            if (!clicked) {
+                console.warn("[LDH] AnyRouter 登录按钮仍被遮挡或不可用，本页停止自动点击");
+                return;
+            }
+            const deadline = Date.now() + 20000;
+            while (!forwarded && !leaving && anyIsEntryPath() && Date.now() < deadline) await arWait(100);
+        } finally {
+            restore();
+            window.removeEventListener("pagehide", restore);
+        }
+    }
+
     async function anyStartOAuth() {
         try {
             const sres = await fetchTimed("/api/status", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
