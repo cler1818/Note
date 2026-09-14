@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.3
+// @version      1.1.4
 // @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录 + 一键获取邀请链接
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -16,6 +16,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
+// @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
 // @grant        GM_setClipboard
@@ -35,7 +36,7 @@
 
     // 私库账号源：登录取整行账号密码，点赞只取用户名。
     const ACCOUNTS_API = "https://api.github.com/repos/cler1818/Personal-Backup/contents/linuxdo/username.txt?ref=main";
-    const GITHUB_TOKEN = "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";
+    const GITHUB_TOKEN_KEY = "ldh_github_token";
 
     // 运行时间单位为分钟；数量数组是含首尾的随机区间。
     const CFG = {
@@ -2391,13 +2392,39 @@
         catch (_) { throw new Error("第 " + number + " 行格式不正确，应为：用户名 密码，或用户名+密码。"); }
     }
 
+    function githubToken(edit) {
+        const saved = String(gmGet(GITHUB_TOKEN_KEY, "") || "").trim();
+        if (saved && !edit && !/\s/.test(saved)) return saved;
+        const input = window.prompt("请输入 GitHub 个人访问令牌（只需填写一次）。\n令牌保存在当前浏览器的油猴存储中，不写入脚本。\n请授予 Personal-Backup 仓库的 Contents 读取权限。", "");
+        if (input === null) return "";
+        const token = input.trim();
+        if (!token || /\s/.test(token)) throw new Error("令牌不能为空，也不能包含空格或换行，请粘贴完整令牌。");
+        try {
+            GM_setValue(GITHUB_TOKEN_KEY, token);
+            if (gmGet(GITHUB_TOKEN_KEY, "") !== token) throw new Error();
+        } catch (_) { throw new Error("令牌保存失败，请检查油猴的存储权限后重试。"); }
+        return token;
+    }
+
+    function initGithubTokenMenu() {
+        if (typeof GM_registerMenuCommand !== "function") return;
+        GM_registerMenuCommand("设置 / 更换 GitHub 令牌", function () {
+            try {
+                if (githubToken(true)) window.alert("令牌已保存。下次读取账号或点赞名单时自动使用，无需修改脚本。");
+            } catch (e) { window.alert(e.message); }
+        });
+    }
+
     function loginReadAccounts(signal) {
         return new Promise(function (resolve, reject) {
+            if (signal && signal.aborted) { reject(new DOMException("请求已取消", "AbortError")); return; }
             if (typeof GM_xmlhttpRequest !== "function") {
                 reject(new Error("缺少跨域请求权限，请在脚本管理器中更新完整脚本。")); return;
             }
-            const token = String(GITHUB_TOKEN || "").trim();
-            if (!token || /\s/.test(token)) { reject(new Error("请在脚本顶部填写有效的 GitHub 令牌。")); return; }
+            let token;
+            try { token = githubToken(false); }
+            catch (e) { reject(e); return; }
+            if (!token) { reject(new Error("未设置 GitHub 令牌，已取消读取。再次执行操作时可重新输入。")); return; }
             let handle = null, done = false;
             function settle(error, value) {
                 if (done) return;
@@ -2422,7 +2449,10 @@
                 onload: function (r) {
                     if (done) return;
                     let error = "";
-                    if (r.status === 401) error = "GitHub 令牌无效或已过期，请更新脚本顶部的令牌。";
+                    if (r.status === 401) {
+                        if (String(gmGet(GITHUB_TOKEN_KEY, "") || "").trim() === token) gmDel(GITHUB_TOKEN_KEY);
+                        error = "GitHub 令牌无效、已过期或已撤销。请再次执行操作以重新输入，或通过油猴菜单更换令牌。";
+                    }
                     else if (r.status === 429 || (r.status === 403 && /^x-ratelimit-remaining:\s*0\s*$/im.test(r.responseHeaders || ""))) error = "GitHub 请求频率受限，请稍后重试。";
                     else if (r.status === 403) error = "令牌没有读取权限，请授予 Personal-Backup 仓库的 Contents 读取权限。";
                     else if (r.status === 404) error = "找不到私库文件，请检查仓库、main 分支、文件路径及令牌授权范围。";
@@ -2804,6 +2834,6 @@
         }, 1000);
         reconcile();
     }
-    function boot() { initLoginPage(); }
+    function boot() { initGithubTokenMenu(); initLoginPage(); }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
