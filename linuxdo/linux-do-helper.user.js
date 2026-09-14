@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.0.8
+// @version      1.1.3
 // @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录 + 一键获取邀请链接
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -12,6 +12,7 @@
 // @match        https://credit.linux.do/*
 // @match        https://agentrouter.org/*
 // @match        https://anyrouter.top/*
+// @match        https://newassets.hcaptcha.com/captcha/v1/*/static/hcaptcha.html*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
@@ -22,60 +23,50 @@
 // @connect      connect.linux.do
 // @connect      credit.linux.do
 // @connect      agentrouter.org
+// @connect      api.github.com
 // @run-at       document-end
 // ==/UserScript==
 
 (function () {
     "use strict";
+    const HC = { origin: "https://newassets.hcaptcha.com", message: "ldh-hcaptcha-v1" };
+    if (location.origin === HC.origin) { hcaptchaFrame(); return; }
     if (window.top !== window.self) return;
 
-    /* ============================================================
-     * ⚙ 配置区（全部区间均为闭区间，含首尾两个数值）
-     * ============================================================ */
+    // 私库账号源：登录取整行账号密码，点赞只取用户名。
+    const ACCOUNTS_API = "https://api.github.com/repos/cler1818/Personal-Backup/contents/linuxdo/username.txt?ref=main";
+    const GITHUB_TOKEN = "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";
+
+    // 运行时间单位为分钟；数量数组是含首尾的随机区间。
     const CFG = {
-        // ---- 日常维护 ----
-        DAILY_MINUTES: 3,              // 运行时间（分钟）
-        DAILY_TOPICS:  [10, 25],       // 主题数量
-        DAILY_REPLIES: [200, 250],     // 帖子数量
-        DAILY_LIKES:   [1, 1],         // 点赞数量
 
-        // ---- 快速升级 ----
-        FAST_MINUTES:  10,             // 运行时间（分钟）
-        FAST_TOPICS:   [50, 100],      // 主题数量
-        FAST_REPLIES:  [2000, 3000],   // 帖子数量
-        FAST_LIKES:    [1, 1],         // 点赞数量
+        DAILY_MINUTES: 3,
+        DAILY_TOPICS:  [10, 25],
+        DAILY_REPLIES: [200, 250],
+        DAILY_LIKES:   [1, 1],
 
-        // ---- 日常挂机 ----
-        IDLE_MINUTES:  500,            // 运行时间（分钟）
-        IDLE_TOPICS:   [200, 500],     // 主题数量
-        IDLE_REPLIES:  [2000, 5000],   // 帖子数量
-        IDLE_LIKES:    [0, 0],         // 点赞数量
+        FAST_MINUTES:  10,
+        FAST_TOPICS:   [50, 100],
+        FAST_REPLIES:  [2000, 3000],
+        FAST_LIKES:    [1, 1],
 
-        // ---- 全局：每次向服务器上传阅读进度(timings)的间隔（秒）----
-        // 每一次上传的间隔都在这个区间内【均匀真随机】抽取，所以第1次可能隔 8 秒、
-        // 第2次隔 47 秒、第3次隔 21 秒，每次都不同，不会出现"每次都无限接近上限"的雷同模式。
-        // 注意：间隔必须 >0 且 <100 秒才会被 Discourse 计入总阅读时间，上限别写太大。
-        REQ_GAP_SEC:   [0, 60]
+        IDLE_MINUTES:  500,
+        IDLE_TOPICS:   [200, 500],
+        IDLE_REPLIES:  [2000, 5000],
+        IDLE_LIKES:    [0, 0],
+
+        REQ_GAP_SEC:   [0, 60]         // 秒；运行时限定为 0.8～99 秒
     };
-    /* ==================== 配置区结束 ==================== */
 
-    /* ============================================================
-     * 面板尺寸（v6.7.10：删除 scale(0.9)，改为原生尺寸）
-     * 旧版是 270px 再 scale(0.9)，实际视觉宽 243px；
-     * 现在直接写 265px 实宽，字号按旧值 ×0.9 折算，视觉接近但不再缩放。
-     * ============================================================ */
+    // 面板尺寸（像素）。
     const UI = {
-        WIDTH: 265,                     // 面板实宽(px)，含 padding（box-sizing:border-box）
-        PAD_X: 8                        // 左右内边距
+        WIDTH: 265,
+        PAD_X: 8
     };
-    UI.COMPOSER_SHIFT = UI.WIDTH * 2;   // 遇到发帖/回复框时右移 2 个面板宽（跟随 WIDTH，改宽度不用改两处）
+    UI.COMPOSER_SHIFT = UI.WIDTH * 2;
 
-    // ============ 共享工具 ============
     function randInt(a, b) { return Math.floor(a + Math.random() * (b - a + 1)); }
-    /* 可中断 sleep：点「停止」后立即返回，不用等这一轮 60 秒的间隔跑完。
-     * 旧版用裸 setTimeout，abort 后仍要等计时器自然到期，
-     * 挂机模式下最长要等一分钟才有反应 —— 这就是"点停止后半天缓不过来"的原因。
-     * 所有等待都注册到 wakers 里，abortAll() 一次性唤醒并清空。 */
+
     let wakers = [];
     function sleep(ms) {
         return new Promise(function (resolve) {
@@ -93,12 +84,7 @@
     function stripAt(s) { return String(s || "").replace(/^@/, "").trim(); }
     function normUser(s) { return stripAt(s).toLowerCase(); }
     function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-    /* 自然天固定按东八区(UTC+8 北京时间)计算，不跟随浏览器本地时区。
-     * 起因：指纹浏览器常把环境时区设成美西等地(实测环境91为 America/Los_Angeles，
-     *       比北京慢15小时)。若用 new Date() 取本地日期，脚本算出的"今天"会比
-     *       北京时间落后一天，导致当天签到被"今天已签过"的锁挡住，白等15小时。
-     * 实现：用 Date.now()(UTC毫秒)加8小时偏移后取 UTC 字段，完全绕开本地时区，
-     *       也不依赖 toLocaleString 的时区数据库(部分指纹浏览器会篡改它)。 */
+
     function todayStr() {
         const d = new Date(Date.now() + 8 * 3600 * 1000);
         return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
@@ -107,26 +93,47 @@
     function gmSet(k, v) { try { GM_setValue(k, v); } catch (_) {} }
     function gmDel(k) { try { GM_deleteValue(k); } catch (_) {} }
 
-    /* ============================================================
-     * 站点常量
-     * ============================================================ */
+    async function fetchTimed(url, options) {
+        const opts = Object.assign({}, options || {}), parent = opts.signal;
+        const ctrl = new AbortController();
+        let timedOut = false;
+        const cancel = function () { ctrl.abort(); };
+        if (parent && parent.aborted) throw new DOMException("请求已取消", "AbortError");
+        if (parent) parent.addEventListener("abort", cancel, { once: true });
+        opts.signal = ctrl.signal;
+        const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, 20000);
+        try {
+            const response = await fetch(url, opts);
+            await response.clone().arrayBuffer();
+            return response;
+        } catch (e) {
+            if (timedOut) throw new Error("请求超时，请稍后重试。");
+            throw e;
+        } finally {
+            clearTimeout(timer);
+            if (parent) parent.removeEventListener("abort", cancel);
+        }
+    }
+
+    // 站点配置与跨站授权。
     const CONNECT_HOST = "https://connect.linux.do";
-    const AUTO_LOGIN_COOLDOWN = 10 * 60 * 1000;   // 主动访问自动登录：10分钟内不重复
-    const SYNC_THROTTLE_MS = 10 * 60 * 1000;      // 等级进度/摘要：跨标签 10 分钟内不重复拉取
+    const AUTO_LOGIN_COOLDOWN = 10 * 60 * 1000;
+    const SYNC_THROTTLE_MS = 10 * 60 * 1000;
 
     const AR = {
         HOST: "https://agentrouter.org",
         CLIENT_ID: "KZUecGfhhDZMVnv8UtEdhOhf9sNOhqVX",
-        FLOW: "ar_tab_flow",          // 跨页面状态机（兜底流程用）
-        DAYKEY: "ar_last_ok_day",     // 当天签到成功的日期戳（本地日期字符串）
-        NOTEKEY: "ar_checkin_note",   // 当天签到状态（按日期存储）
-        UIDKEY: "ar_user_id",         // New-API-User 头所需的用户ID
-        BALKEY: "ar_balance",         // 余额缓存(全局，单账号)
-        BALDAY: "ar_balance_day",     // 余额成功获取的日期戳 —— 和签到分开记，
-                                      // 这样"签到成功但余额没读到"时，下次只补查余额、不重复签到
-        AUTOKEY: "ar_auto_login_ts",  // 主动访问自动登录的节流时间戳
-        SIDEKEY: "ar_side_login_v1",  // 别的标签页手动登录后回写余额，供论坛面板读取
-        TAB_TIMEOUT: 30 * 1000        // 前台标签兜底的超时
+        FLOW: "ar_tab_flow",
+        DAYKEY: "ar_last_ok_day",
+        REWARDKEY: "ar_reward_confirmed_day",
+        NOTEKEY: "ar_checkin_note",
+        UIDKEY: "ar_user_id",
+        BALKEY: "ar_balance",
+        BALDAY: "ar_balance_day",
+
+        AUTOKEY: "ar_auto_login_ts",
+        SIDEKEY: "ar_side_login_v1",
+        TAB_TIMEOUT: 30 * 1000
     };
     const ANY = {
         HOST: "https://anyrouter.top",
@@ -134,20 +141,20 @@
         FLOW: "anyrouter_login_flow_v1",
         TTL: 3 * 60 * 1000,
         AUTOKEY: "any_auto_login_ts",
-        BANPREFIX: "anyrouter_ban_"   // + 规范化后的 LD 用户名
+        BANPREFIX: "anyrouter_ban_"
     };
     const CREDIT = {
         HOST: "https://credit.linux.do",
         CLIENT_ID: "EQepJmrayDhYMykHHouVF9mgcBwdoXcy",
         REDIRECT: "https://credit.linux.do/login",
         SCOPE: "openid profile email",
-        BALPREFIX: "credit_bal_",     // + 规范化后的 LD 用户名 → {v, at, day}
-        API_TIMEOUT: 8000,            // 直接读余额的超时
-        TAB_TIMEOUT: 30 * 1000        // 前台标签兜底的超时（拿到数据就提前关）
+        BALPREFIX: "credit_bal_",
+        API_TIMEOUT: 8000,
+        TAB_TIMEOUT: 30 * 1000
     };
-    // 前台标签互斥锁：多个论坛标签同时失败时，只让一个去开标签，避免同时弹一堆
+
     const TABLOCK_KEY = "ldh_fg_tab_lock";
-    const TABLOCK_TTL = 40 * 1000;    // 略大于 TAB_TIMEOUT，持锁者异常退出后自动过期
+    const TABLOCK_TTL = 40 * 1000;
     function acquireTabLock() {
         const now = Date.now(), cur = Number(gmGet(TABLOCK_KEY, 0)) || 0;
         if (now - cur < TABLOCK_TTL) return false;
@@ -155,19 +162,12 @@
     }
     function releaseTabLock() { gmDel(TABLOCK_KEY); }
 
-    /* ---- OAuth client_id 白名单 ----
-     * 只对下面三个已确认的应用自动点「允许」。绝不放开成"所有应用"：
-     * 那样任何网站都能把你导到 connect 授权页，在你看清之前拿走 LINUX DO 身份。 */
     const OAUTH_ALLOW = [AR.CLIENT_ID, ANY.CLIENT_ID, CREDIT.CLIENT_ID];
     function clientAllowed(id) { return !!id && OAUTH_ALLOW.indexOf(id) >= 0; }
 
-    // 主动访问自动登录的节流：10分钟内同一站点不重复触发
     function autoLoginAllowed(key) { return Date.now() - Number(gmGet(key, 0) || 0) > AUTO_LOGIN_COOLDOWN; }
     function markAutoLogin(key) { gmSet(key, Date.now()); }
 
-    /* ============================================================
-     * 通用：等待并点击（Q3=a / Q4=a / Q9）
-     * ============================================================ */
     function waitAndClick(find, timeoutMs) {
         timeoutMs = Number(timeoutMs) || 10000;
         const started = Date.now();
@@ -182,8 +182,7 @@
             function tryClick() {
                 let el = null;
                 try { el = find(); } catch (_) { el = null; }
-                // 后台标签(visibilityState=hidden)里布局可能还没算，getClientRects() 会是 0；
-                // 此时不能因为"看不见"就不点，否则 Credit 的后台自动登录永远走不完。
+
                 const visible = (el && el.getClientRects().length > 0) || document.visibilityState === "hidden";
                 if (el && visible && !el.disabled && el.getAttribute("aria-disabled") !== "true") {
                     try { el.click(); } catch (_) { stop(false); return true; }
@@ -200,19 +199,19 @@
             timer = setInterval(tryClick, 250);
         });
     }
-    // Q4=a：模糊匹配。按钮文本同时含 linux 和 do，并带登录动词（继续/登录/login/continue/sign in）
+
     function normText(el) { return String((el && el.textContent) || "").replace(/\s+/g, " ").trim(); }
     function looksLikeLdLoginBtn(el) {
         const t = normText(el);
         if (!t || t.length > 40) return false;
         const s = t.toLowerCase().replace(/[\s_\-]+/g, "");
         if (s.indexOf("linux") < 0) return false;
-        // "linuxdo" 连写、或 linux 后面紧跟 do
+
         if (!/linuxdo/.test(s)) return false;
         return /继续|登录|登陆|login|continue|signin|sign in|授权/i.test(t);
     }
     function findLdLoginBtn() {
-        // 后台标签里布局未计算，getClientRects() 恒为 0；此时放宽可见性判断
+
         const bg = document.visibilityState === "hidden";
         const seen = function (el) { return bg || el.getClientRects().length > 0; };
         const nodes = document.querySelectorAll('button, a[role="button"], div[role="button"], input[type="button"], input[type="submit"]');
@@ -228,17 +227,9 @@
         return null;
     }
 
-    /* ============================================================
-     * 跨域请求工具（GM）
-     * ============================================================ */
-    /* AgentRouter 的 New-API-User 头 —— 必须每次从 GM 存储现读，不能缓存在内存里。
-     * 原因：兜底流程是在【另一个标签页】(agentrouter.org) 里完成登录并写入 UID 的，
-     * 论坛这边的脚本早就启动了，内存变量停留在启动那一刻的旧值(通常是 0)，
-     * 于是请求不带这个头 → 服务器回「未提供 New-Api-User」。
-     * 刷新论坛后脚本重启、重新读到 UID 就好了 —— 这正是"刷新一下立马就好"的真正原因。 */
     function arUid() { return Number(gmGet(AR.UIDKEY, 0)) || 0; }
     function setArUid(id) { id = Number(id) || 0; if (id > 0 && id !== arUid()) gmSet(AR.UIDKEY, id); }
-    // 兜底标签页登录完成后，UID 的写入和本页读取之间有几百毫秒空档，这里等它出现
+
     async function waitArUid(maxMs) {
         const t0 = Date.now();
         while (Date.now() - t0 < (maxMs || 3000)) {
@@ -256,19 +247,9 @@
         return String(t || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
             .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 100);
     }
-    /* Cloudflare 验证页识别（1.0.7 修）。
-     * 【实测踩坑】原来这些判断里有一个裸的 "cloudflare" 关键词，而
-     * connect.linux.do 的授权页会加载 Cloudflare Insights 探针：
-     *   <script src="https://static.cloudflareinsights.com/beacon.min.js/...">
-     * HTML 里天然就带 "cloudflare" 字样，于是【每一个正常授权页】都被误判成
-     * "被验证页拦截"，造成两个后果：
-     *   · 需要点「允许」的授权页 → 纯代码路径直接失败，白开 30 秒前台兜底标签
-     *   · 无权限的授权页        → 走不到 detectNoOauth，永远落不下无权限标志
-     * 所以关键词必须限定到真正的挑战页特征。注意 cf[-_]chl 两种写法都要覆盖
-     * (cf-chl 和 __cf_chl)，challenges.cloudflare.com 是 Turnstile 的 iframe 域名，
-     * 和 static.cloudflareinsights.com 不是一回事。 */
+
     const CF_CHALLENGE_RE = /just a moment|cf[-_]chl|cf-browser-verification|attention required|verify you are human|checking if the site connection|challenges\.cloudflare\.com|cdn-cgi\/challenge/i;
-    // 把"返回非JSON"细分成可判断的原因，否则验证页/登录页/网关错误全都长一个样
+
     function arNonJsonError(r, url) {
         const text = String(r.responseText || ""), status = Number(r.status) || 0;
         const preview = arBodyPreview(text), finalUrl = String(r.finalUrl || url || "");
@@ -288,20 +269,22 @@
         return new Promise(function (resolve, reject) {
             if (typeof GM_xmlhttpRequest !== "function") { reject(new Error("缺少跨域权限")); return; }
             const h = { "Accept": "application/json, text/plain, */*" };
-            // New-API-User 只发给 agentrouter.org，不能泄露给别的站点
+
             let host = ""; try { host = new URL(url).hostname; } catch (_) {}
             if (host === "agentrouter.org" && opts.userHeader !== false) {
-                const uid = arUid();                 // 现读，别用启动时的旧值
+                const uid = arUid();
                 if (uid > 0) h["New-API-User"] = String(uid);
             }
             const ex = opts.headers || {};
             Object.keys(ex).forEach(function (k) { h[k] = ex[k]; });
             GM_xmlhttpRequest({
                 method: opts.method || "GET", url: url, headers: h,
+                data: opts.data,
                 withCredentials: true, timeout: Number(opts.timeout) || 20000,
                 onload: function (r) { resolve(r); },
                 onerror: function () { reject(new Error("网络错误")); },
-                ontimeout: function () { reject(new Error("请求超时")); }
+                ontimeout: function () { reject(new Error("请求超时")); },
+                onabort: function () { reject(new Error("请求已取消")); }
             });
         });
     }
@@ -309,10 +292,11 @@
         const r = await gmFetch(url, opts);
         const text = String(r.responseText || "").replace(/^﻿/, "").trim();
         let b; try { b = JSON.parse(text); } catch (_) { throw arNonJsonError(r, url); }
-        if (r.status >= 400 || b.success === false) throw new Error(b.message || ("HTTP " + r.status));
+        if (!b || typeof b !== "object") throw new Error("接口返回的数据不完整");
+        if (r.status < 200 || r.status >= 300 || b.success === false) throw new Error(b.message || ("HTTP " + r.status));
         return b;
     }
-    // 只对网络类抖动重试；OAuth code 是一次性的，绝不重试回调
+
     async function gmJsonRetry(url, opts, retries) {
         let last; retries = Number(retries) || 0;
         for (let i = 0; i <= retries; i++) {
@@ -326,9 +310,6 @@
         throw last;
     }
 
-    /* ============================================================
-     * 等级3（connect）数据解析
-     * ============================================================ */
     function labelKey(s) {
         s = String(s || "");
         if (/访问/.test(s)) return "visit_days";
@@ -372,9 +353,6 @@
         return true;
     }
 
-    /* ============================================================
-     * AR 签到状态持久化（Q12=a：三段式，手动登录只覆盖余额）
-     * ============================================================ */
     function saveArNote(state, text, bal) {
         try { gmSet(AR.NOTEKEY, JSON.stringify({ date: todayStr(), state: state, text: text, bal: bal || "" })); } catch (_) {}
     }
@@ -386,9 +364,6 @@
         return null;
     }
 
-    /* ============================================================
-     * AnyRouter 封禁状态（按 LD 用户名分开存，Q7）
-     * ============================================================ */
     function anyBanKey(u) { return ANY.BANPREFIX + (normUser(u) || "unknown"); }
     let _banCache = { key: "", at: 0, v: null };
     function getAnyBan(u) {
@@ -405,43 +380,19 @@
         _banCache = { key: "", at: 0, v: null };
     }
     function clearAnyBan(u) { gmDel(anyBanKey(u)); _banCache = { key: "", at: 0, v: null }; }
-    // 当前登录的 LD 用户名（跨站点共享，供 anyrouter 分支识别账号）
+
     const LD_USER_KEY = "ldh_current_ld_user";
     function currentLdUser() { return normUser(gmGet(LD_USER_KEY, "")); }
 
-    /* ============================================================
-     * 永久无 OAuth 权限标志（1.0.7 新增）
-     *
-     * 背景（实测 2026-08-23，env101-104）：
-     *   新注册的号在 connect 授权页会被直接拒绝，页面返回 HTTP 200，
-     *   正文里有 <div class="alert-box alert-danger">你所在的用户组无法使用</div>，
-     *   并且没有「允许」链接。三个应用(Credit/AgentRouter/AnyRouter)共用同一个
-     *   授权页，所以拒绝与 client_id 无关 —— 一个标志就能锁死三个。
-     *
-     * 不加这个标志的代价（实测）：每开一次论坛，
-     *   LDC  纯代码失败 → 开前台标签抢焦点干等 30 秒
-     *   Agent 纯代码失败 → 开前台标签抢焦点干等 30 秒
-     * 而且两者都只在【成功】时才写当天缓存，所以每次开论坛都会重跑一遍。
-     *
-     * 判定用三重条件，少一条都不判（见 detectNoOauth）。最关键的是第二条：
-     * 拒绝页里仍然写着「以 @用户名 的身份授权」，证明登录态是好的 ——
-     * 没有这一条，Cookie 过期那一刻就会被误判成永久无权限，
-     * 而标志是【一次命中即永久】且面板上什么都不显示，误判了不会被发现。
-     *
-     * 解锁：只有手动点标题栏 ⟳ 才会清标志重试（retryOauth）。
-     * 不做 trust_level 复检 —— 按需求，这类号升级也拿不到权限。
-     * ============================================================ */
     const NO_OAUTH_PREFIX = "ldh_no_oauth_";
     const NO_OAUTH_TEXT = "你所在的用户组无法使用";
     const NO_OAUTH_MSG = "该账号所在用户组无法使用 OAuth 授权";
     function noOauthKey(u) { return NO_OAUTH_PREFIX + normUser(u); }
     let _noOauthCache = { key: "", at: 0, v: null };
-    /* 和 readTL3 / getAnyBan 一样做 3 秒内存缓存：
-     * render() 里每次都要问「锁了没」，而刷帖时 render 每秒跑一遍，
-     * 直接读 GM 存储的话 500 分钟挂机会产生上万次同步读。 */
+
     function getNoOauth(u) {
         const name = normUser(u);
-        if (!name) return null;               // 没登录时绝不判定，否则会锁到 unknown 上
+        if (!name) return null;
         const key = noOauthKey(name);
         if (_noOauthCache.key === key && Date.now() - _noOauthCache.at < 3000) return _noOauthCache.v;
         let v = null;
@@ -449,14 +400,10 @@
         _noOauthCache = { key: key, at: Date.now(), v: v };
         return v;
     }
-    // from 只用于事后排查是哪条路径先撞上的，不参与任何判断
-    /* from 只用于事后排查是哪条路径先撞上的，不参与任何判断。
-     * tl 必须由调用方传进来，绝不能在这里读 me.trustLevel ——
-     * connect.linux.do 分支在 `let me` 之前就执行了，读它会踩 TDZ
-     * 抛 "Cannot access 'me' before initialization"，把整个分支打挂。 */
+
     function saveNoOauth(u, from, tl) {
         const name = normUser(u);
-        if (!name) return;                    // 同上：没有用户名就不写，避免误锁
+        if (!name) return;
         gmSet(noOauthKey(name), JSON.stringify({
             locked: true, from: from || "", tl: (typeof tl === "number" ? tl : null), at: Date.now()
         }));
@@ -471,9 +418,6 @@
     }
     function noOauthError() { const e = new Error(NO_OAUTH_MSG); e.noOauth = true; return e; }
 
-    /* ---- 活 DOM 版判定（connect.linux.do 授权页上用）----
-     * 和 detectNoOauth 的区别：那个吃 HTML 字符串(GM 请求回来的)，
-     * 这个直接读当前页面的 DOM。选择器和文案两者一致。 */
     function deniedBoxText(root) {
         const boxes = (root || document).querySelectorAll(".alert-box.alert-danger");
         for (let i = 0; i < boxes.length; i++) {
@@ -482,8 +426,7 @@
         }
         return "";
     }
-    /* 从授权页正文里取"以 @用户名 的身份授权"中的用户名。
-     * 这是【真正被拒的那个账号】，比 currentLdUser() 的跨站缓存可靠。 */
+
     function authorizedUserFromPage() {
         const el = document.body;
         if (!el) return "";
@@ -492,21 +435,18 @@
         return m ? normUser(m[1]) : "";
     }
 
-    /* 三重条件判定授权页是不是「用户组无权限」。
-     * 任何一条不满足都返回 false —— 宁可漏报(白跑一次)，绝不误报(永久废掉好号)。 */
     function detectNoOauth(html) {
         const s = String(html || "");
-        if (s.indexOf(NO_OAUTH_TEXT) < 0) return false;      // 快速否定，省掉解析
+        if (s.indexOf(NO_OAUTH_TEXT) < 0) return false;
         let doc = null;
         try { doc = new DOMParser().parseFromString(s, "text/html"); } catch (_) { return false; }
         if (!doc || !doc.body) return false;
-        // 条件2：仍显示「以 @用户名 的身份授权」→ 登录态正常。
-        // 这条是把「登录失效」挡在外面的唯一锚点，绝不能省。
+
         const body = String(doc.body.textContent || "").replace(/\s+/g, " ");
         if (!/以\s*@[A-Za-z0-9_.\-]+\s*的身份授权/.test(body)) return false;
-        // 条件3：确实没有「允许」链接（有的话说明本来就能授权）
+
         if (doc.querySelector('a[href^="/oauth2/approve/"]')) return false;
-        // 条件1：拒绝文案挂在 alert-box alert-danger 上（不是全文随便匹配）
+
         const boxes = doc.querySelectorAll(".alert-box.alert-danger");
         for (let i = 0; i < boxes.length; i++) {
             if (String(boxes[i].textContent || "").replace(/\s+/g, "").indexOf(NO_OAUTH_TEXT) >= 0) return true;
@@ -514,22 +454,20 @@
         return false;
     }
 
-
-    /* ============================================================
-     * AgentRouter：纯代码 OAuth
-     * ============================================================ */
     function paramsFrom(u) { try { const x = new URL(u); const c = x.searchParams.get("code"), s = x.searchParams.get("state"); if (c && s) return { code: c, state: s }; } catch (_) {} return null; }
     function paramsFromText(t) {
-        const c = (t || "").match(/[?&]code=([^&"'\s]+)/), s = (t || "").match(/[?&]state=([^&"'\s]+)/);
-        return (c && s) ? { code: decodeURIComponent(c[1]), state: decodeURIComponent(s[1]) } : null;
+        const text = String(t || "").replace(/&amp;/g, "&");
+        const c = text.match(/[?&]code=([^&"'\s]+)/), s = text.match(/[?&]state=([^&"'\s]+)/);
+        try { return (c && s) ? { code: decodeURIComponent(c[1]), state: decodeURIComponent(s[1]) } : null; }
+        catch (_) { return null; }
     }
     function parseApprove(html) {
         try {
             const doc = new DOMParser().parseFromString(html, "text/html");
             const links = Array.prototype.slice.call(doc.querySelectorAll('a[href^="/oauth2/approve/"]'));
-            const yes = links.find(function (a) { return (a.textContent || "").replace(/\s+/g, "") === "允许"; }) || links[0];
+            const yes = links.find(function (a) { return (a.textContent || "").replace(/\s+/g, "") === "允许"; });
             return yes ? yes.getAttribute("href") : null;
-        } catch (_) { const m = (html || "").match(/\/oauth2\/approve\/[A-Za-z0-9_\-]+/); return m ? m[0] : null; }
+        } catch (_) { return null; }
     }
     async function arOAuth(say, withLogout) {
         if (withLogout) { say("退出登录…"); await gmFetch(AR.HOST + "/api/user/logout", { userHeader: true }).catch(function () {}); }
@@ -544,8 +482,7 @@
         if (a.status >= 400 || CF_CHALLENGE_RE.test(a.responseText || "")) throw arNonJsonError(a, a.finalUrl);
         let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
         if (!cs) {
-            // 1.0.7：先分辨「用户组无权限」。原来这里一律报"登录态可能失效"，
-            // 把永久无权限误说成登录问题，然后还要白开一个 30 秒的兜底标签。
+
             if (detectNoOauth(a.responseText)) throw noOauthError();
             const ap = parseApprove(a.responseText);
             if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
@@ -556,22 +493,20 @@
             cs = paramsFrom(approved.finalUrl) || paramsFromText(approved.responseText);
         }
         if (!cs) throw new Error("授权完成但没返回code/state");
-        // 关键：签到结果只在这个回调里（data.checked_in），不能吞掉错误也不能重试(code一次性)
+        if (String(cs.state) !== String(state)) throw new Error("授权 state 不匹配，请重新登录。");
+
         say("提交签到回调…");
         const cb = await gmJson(AR.HOST + "/api/oauth/linuxdo?code=" + encodeURIComponent(cs.code) +
             "&state=" + encodeURIComponent(cs.state) + "&mode=login", { userHeader: false });
         if (!cb || !cb.data || !cb.data.id) throw new Error("回调成功但缺少用户信息");
         setArUid(cb.data.id);
         say("读取账户…");
-        const self = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1);
-        if (!self || !self.data || !self.data.id) throw new Error("仍未登录");
-        setArUid(self.data.id);
-        return { user: self.data, checkedIn: cb.data.checked_in === true, source: "code" };
+        const self = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1).catch(function () { return null; });
+        const user = self && self.data && self.data.id ? self.data : cb.data;
+        setArUid(user.id);
+        return { user: user, checkedIn: cb.data.checked_in === true, source: "code" };
     }
-    /* 兜底：纯代码被 Cloudflare 验证页拦住时，开【前台】标签走站点原生 OAuth。
-     * 用前台不用后台，是因为后台标签被 Chrome 节流后 React 应用起不来，
-     * 流程永远走不完 —— 这也是"后台总失败、一激活标签就成功"的原因。
-     * 拿到结果立刻关标签，最长 30 秒。 */
+
     function arFallbackTab(say) {
         return new Promise(function (resolve, reject) {
             gmSet(AR.FLOW, { step: "start", ts: Date.now() });
@@ -583,9 +518,12 @@
             const started = Date.now();
             const iv = setInterval(function () {
                 const flow = gmGet(AR.FLOW, null);
-                if (flow && flow.step === "done") {
+                if (handle.closed) {
+                    clearInterval(iv); gmDel(AR.FLOW); reject(new Error("授权标签已关闭。"));
+                } else if (flow && flow.step === "done") {
                     clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
-                    if (flow.error) reject(new Error(flow.error));
+                    if (flow.noOauth) reject(noOauthError());
+                    else if (flow.error) reject(new Error(flow.error));
                     else resolve({ checkedIn: flow.checkedIn === true, source: "tab" });
                 } else if (Date.now() - started > AR.TAB_TIMEOUT) {
                     clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
@@ -594,23 +532,18 @@
             }, 700);
         });
     }
-    /* ---- 余额查询：quota / quota_per_unit = 美元 ----
-     * 关键时序问题：GM_xmlhttpRequest 完成 OAuth 回调后，服务器返回的 Set-Cookie
-     * 写进浏览器 Cookie jar 需要一点时间。回调一返回就立刻查余额，请求往往还没带上
-     * 新 Cookie，服务器直接回 401 —— 这就是"签到成功但余额读取失败、刷新一下又好了"的原因。
-     * 所以这里：先等一会儿让 Cookie 落地，再查；失败了按 1s/2s/3s 递增重试。
-     * 另外绝不再把错误吞成空字符串 —— 真实原因要能显示到面板 tooltip 上。 */
+
     const AR_QPD_FALLBACK = 500000;
     async function arBalance(userData, opts) {
         opts = opts || {};
-        const waitFirst = opts.waitFirst || 0;      // 首次查询前的等待（刚跑完 OAuth 时用）
+        const waitFirst = opts.waitFirst || 0;
         const retries = opts.retries === undefined ? 3 : opts.retries;
         if (waitFirst > 0) await arWait(waitFirst);
 
         let u = userData, lastErr = null;
-        // userData 来自 OAuth 回调时可能已经带 quota，省一次请求
+
         if (!u || typeof u.quota === "undefined") {
-            // 没有 UID 就必然被拒（「未提供 New-Api-User」），先等一会儿看它写进来没有
+
             if (arUid() <= 0) await waitArUid(3000);
             if (arUid() <= 0) throw new Error("尚未取得 AgentRouter 账号ID，点击重试");
             for (let i = 0; i <= retries; i++) {
@@ -620,7 +553,7 @@
                     if (u && typeof u.quota !== "undefined") { lastErr = null; break; }
                     lastErr = new Error("返回里没有 quota 字段");
                 } catch (e) { lastErr = e; }
-                if (i < retries) await arWait(1000 * (i + 1));   // 1s → 2s → 3s
+                if (i < retries) await arWait(1000 * (i + 1));
             }
         }
         if (!u || typeof u.quota === "undefined") {
@@ -630,7 +563,7 @@
         try {
             const st = await gmJson(AR.HOST + "/api/status", { userHeader: false });
             qpd = (st && st.data && Number(st.data.quota_per_unit)) || AR_QPD_FALLBACK;
-        } catch (_) {}                                // 汇率取不到用默认值，不影响主流程
+        } catch (_) {}
         if (!(qpd > 0)) qpd = AR_QPD_FALLBACK;
         return "$" + (Number(u.quota) / qpd).toFixed(2);
     }
@@ -638,16 +571,14 @@
         try { return await arOAuth(say, true); }
         catch (e) {
             const msg = (e && e.message) || String(e);
-            // 1.0.7：用户组无权限时开兜底标签也一定被同一个授权页拒掉，
-            // 只会白抢一次焦点再干等 30 秒。直接把错误抛上去让调用方落标志。
+
             if (e && e.noOauth) throw e;
             say("纯代码失败:" + msg);
-            // 前台标签会抢焦点，同一时刻只允许一个标签开（手动触发不受限）
+
             if (!manualTrigger && !acquireTabLock()) throw new Error(msg + " / 另一个标签正在授权");
             try {
                 const r = await arFallbackTab(say);
-                /* 兜底标签页里的脚本刚把 UID 写进 GM 存储，这边要等它可读再查账户，
-                 * 否则请求不带 New-API-User 头，服务器直接回「未提供 New-Api-User」。 */
+
                 say("等待账号ID…");
                 await waitArUid(3000);
                 if (!r.user) {
@@ -655,6 +586,7 @@
                 }
                 return r;
             } catch (e2) {
+                if (e2 && e2.noOauth) throw e2;
                 throw new Error(msg + " / 兜底:" + ((e2 && e2.message) || e2));
             } finally {
                 if (!manualTrigger) releaseTabLock();
@@ -662,9 +594,6 @@
         }
     }
 
-    /* ============================================================
-     * AnyRouter 工具
-     * ============================================================ */
     function anyGetFlow() {
         try {
             const f = JSON.parse(gmGet(ANY.FLOW, "null"));
@@ -681,16 +610,16 @@
         const u = getStoredUser();
         if (!u) return false;
         try {
-            const r = await fetch("/api/user/self", { credentials: "include", cache: "no-store", headers: { "New-API-User": String(u.id) } });
+            const r = await fetchTimed("/api/user/self", { credentials: "include", cache: "no-store", headers: { "New-API-User": String(u.id) } });
             const b = await r.json();
             return !!(r.ok && b.success !== false && b.data && b.data.id);
         } catch (_) { return false; }
     }
     function isEntryPath() { const p = location.pathname; return p === "/" || p === "" || p === "/login"; }
 
-    // ================= agentrouter.org 分支 =================
+    // AgentRouter 页面。
     if (location.hostname === "agentrouter.org") {
-        /* ---- 空白页自愈 ---- */
+
         (function selfHealBlankPage() {
             const KEY = "ldh_ar_healed";
             function rootEmpty() { const r = document.getElementById("root"); return !r || r.innerHTML.length === 0; }
@@ -718,15 +647,14 @@
 
         (function () { const u = getStoredUser(); if (u && u.id) setArUid(u.id); })();
 
-        // Q12=a：手动登录成功后，把余额回写给论坛面板（只覆盖余额，不动签到结论）
         function arReportSideBalance() {
             const u = getStoredUser();
             if (!u || !u.id) return;
-            fetch("/api/status", { credentials: "include", cache: "no-store" })
+            fetchTimed("/api/status", { credentials: "include", cache: "no-store" })
                 .then(function (r) { return r.json(); })
                 .then(function (st) {
                     const qpd = (st && st.data && Number(st.data.quota_per_unit)) || AR_QPD_FALLBACK;
-                    return fetch("/api/user/self", { credentials: "include", cache: "no-store", headers: { "New-API-User": String(u.id) } })
+                    return fetchTimed("/api/user/self", { credentials: "include", cache: "no-store", headers: { "New-API-User": String(u.id) } })
                         .then(function (r) { return r.json(); })
                         .then(function (s) {
                             if (!s || !s.data || typeof s.data.quota === "undefined") return;
@@ -742,11 +670,7 @@
             (async function () {
                 const stored = getStoredUser();
                 if (flow.step === "authorizing") {
-                    /* 判定登录完成：只要 localStorage 里有了 user.id 就算成功。
-                     * 不再强求落点是 /console —— AgentRouter 登录后的落点会变
-                     * (实测有 /console/token)，写死路径会让流程永远等不到。
-                     * 必须先写 UID 再标 done：论坛那边收到 done 后立刻要用这个 ID
-                     * 去查余额，顺序反了就会拿到「未提供 New-Api-User」。 */
+
                     const finishIfReady = function () {
                         const cur = getStoredUser();
                         if (!cur || !cur.id) return false;
@@ -764,9 +688,9 @@
                     gmSet(AR.FLOW, { step: "authorizing", ts: Date.now() });
                     try {
                         const headers = stored && stored.id ? { "New-API-User": String(stored.id) } : {};
-                        await fetch("/api/user/logout", { credentials: "include", cache: "no-store", headers: headers }).catch(function () {});
+                        await fetchTimed("/api/user/logout", { credentials: "include", cache: "no-store", headers: headers }).catch(function () {});
                         localStorage.removeItem("user");
-                        const resp = await fetch("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" });
+                        const resp = await fetchTimed("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" });
                         const txt = await resp.text();
                         let b; try { b = JSON.parse(txt); } catch (_) { throw new Error("页面流程返回非JSON(HTTP " + resp.status + ")"); }
                         if (!resp.ok || b.success === false || !b.data) throw new Error(b.message || ("HTTP " + resp.status));
@@ -775,22 +699,21 @@
                 }
             })();
         } else if (isEntryPath()) {
-            // 主动访问：未登录则自动登录（F1：先点按钮，2秒没点到回退纯代码；10分钟节流）
+
             (async function () {
                 if (await siteLoggedIn()) { arReportSideBalance(); return; }
+                if (getNoOauth(currentLdUser())) return;
                 if (!autoLoginAllowed(AR.AUTOKEY)) return;
                 markAutoLogin(AR.AUTOKEY);
                 const clicked = await waitAndClick(findLdLoginBtn, 2000);
-                if (clicked) return;                       // 交给站点自己跳转
+                if (clicked) return;
                 try {
-                    const b = await (await fetch("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" })).json();
+                    const b = await (await fetchTimed("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" })).json();
                     if (b && b.data) location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(b.data));
                 } catch (_) {}
             })();
         } else {
-            /* 其它页面（/console、/console/token…）：已登录就把余额回写给论坛面板。
-             * AgentRouter 是单页应用，路由切换不会重新执行脚本，而你登录后落点未必是
-             * 首页 —— 所以这里多探几次，只要哪一次检测到登录态就回写，然后停手。 */
+
             (function () {
                 let n = 0;
                 const iv = setInterval(function () {
@@ -805,10 +728,10 @@
         return;
     }
 
-    // ================= anyrouter.top 分支 =================
+    // AnyRouter 页面。
     if (location.hostname === "anyrouter.top") {
         const LD_U = currentLdUser();
-        // Q13：封禁检测（[role=alert] 文本含"用户已被封禁"，MutationObserver 实时监听）
+
         (function watchAnyBan() {
             let finished = false;
             function scan() {
@@ -857,7 +780,7 @@
                 if (getAnyBan(LD_U)) { console.warn("[LDH] AnyRouter 已封禁，跳过自动登录"); return; }
                 if (!autoLoginAllowed(ANY.AUTOKEY)) return;
                 markAutoLogin(ANY.AUTOKEY);
-                // 公告弹窗可能挡住登录按钮
+
                 const close = Array.prototype.slice.call(document.querySelectorAll("button")).find(function (b) { return normText(b) === "关闭公告" && b.getClientRects().length; })
                            || document.querySelector('button[aria-label="close"]');
                 if (close && close.getClientRects().length) { try { close.click(); } catch (_) {} }
@@ -870,22 +793,20 @@
     }
     async function anyStartOAuth() {
         try {
-            const sres = await fetch("/api/status", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
+            const sres = await fetchTimed("/api/status", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
             const cid = (sres && sres.data && sres.data.linuxdo_client_id) || ANY.CLIENT_ID;
-            const st = await fetch("/api/oauth/state", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
+            const st = await fetchTimed("/api/oauth/state", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
             const state = st && st.data;
             if (!state) return;
             location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + encodeURIComponent(cid) + "&state=" + encodeURIComponent(state));
         } catch (_) {}
     }
 
-    // ================= credit.linux.do 分支 =================
+    // Credit 页面。
     if (location.hostname === "credit.linux.do") {
-        /* Credit 是 Next.js SPA：/home 未登录时是【客户端路由】跳到 /login，
-         * 页面不会重新加载，document-end 时看 pathname 还停在 /home。
-         * 所以不能只判断一次路径，必须持续观察登录表单出现。
-         * 停止条件：URL 出现 code（已回调）、或已跳到 /home、或超时 90 秒。 */
+
         (function creditAutoLogin() {
+            if (getNoOauth(currentLdUser())) return;
             const started = Date.now();
             let termsDone = false, loginClicked = false, stopped = false;
             const bg = document.visibilityState === "hidden";
@@ -895,27 +816,26 @@
             function step() {
                 if (stopped) return;
                 if (Date.now() - started > CREDIT.TAB_TIMEOUT) { stop(); return; }
-                // 已经拿到 code（OAuth 回调中）→ 交给站点自己处理，绝不能再点登录
+
                 if (new URLSearchParams(location.search).has("code")) { stop(); return; }
-                // 已经进 /home 说明登录完成
+
                 if (location.pathname.indexOf("/home") === 0 && !document.querySelector("#terms")) return;
 
-                // A. 先勾条款（是 button[role=checkbox]，不是 input）
                 if (!termsDone) {
                     const t = document.querySelector('#terms[role="checkbox"], #terms');
                     if (t) {
-                        if (t.getAttribute("aria-checked") === "true" || t.getAttribute("data-state") === "checked") {
+                        if (t.checked === true || t.getAttribute("aria-checked") === "true" || t.getAttribute("data-state") === "checked") {
                             termsDone = true;
                         } else if (seen(t)) {
                             try { t.click(); } catch (_) {}
-                            return;                       // 点完这一轮就返回，下一轮再看是否已勾上
+                            return;
                         }
                     }
                 }
-                // B. 条款勾上后再点登录按钮（模糊匹配，兼容"使用 LINUX DO 登录"）
+
                 if (termsDone && !loginClicked) {
                     const b = findLdLoginBtn();
-                    if (b && seen(b)) { try { b.click(); loginClicked = true; } catch (_) {} }
+                    if (b && seen(b) && !b.disabled && b.getAttribute("aria-disabled") !== "true") { try { b.click(); loginClicked = true; } catch (_) {} }
                 }
             }
             const ob = new MutationObserver(step);
@@ -926,40 +846,30 @@
         return;
     }
 
-    // ================= connect.linux.do 分支 =================
+    // Connect 授权和等级同步。
     if (location.hostname === "connect.linux.do") {
         if (location.pathname === "/oauth2/authorize") {
-            // 只对白名单里的三个应用自动点「允许」；其它应用一律不碰，由你自己决定
+
             const cid = new URLSearchParams(location.search).get("client_id") || "";
 
-            /* ---- 1.0.8：在授权页【实地读活 DOM】判定"用户组无权限" ----
-             * 这是主判定点，GM 请求那条路只当兜底。原因是实测发现：
-             *   · GM_xmlhttpRequest 在【扩展后台】发出，不共享本环境的代理/会话，
-             *     它拿到的响应和页面里 fetch 到的不是一回事；
-             *   · Agent 那条路更早就断了 —— agentrouter.org 的 /api/oauth/state
-             *     返回非 JSON(CF 挑战页)，gmJson 直接抛"被验证页拦截"，
-             *     流程压根走不到 connect，detectNoOauth 永远没机会执行；
-             *   · 而 anyrouter / agentrouter 的自动登录是【真实页面跳转】，
-             *     最终就落在这个页面上 —— 也就是你手动打开看到报错的那个 URL。
-             * 在这里读 DOM，看到的和你眼睛看到的完全一致，绕开整个 GM 层。
-             *
-             * 账号名优先从页面上"以 @xxx 的身份授权"取 —— 那是【真正被拒的那个号】，
-             * 比 currentLdUser() 里跨站共享的缓存值准确。 */
             const markDeniedHere = function () {
                 if (!deniedBoxText()) return false;
-                const who = authorizedUserFromPage() || currentLdUser();
+                if (document.querySelector('a[href^="/oauth2/approve/"]')) return false;
+                const who = authorizedUserFromPage();
                 if (!who) {
-                    // 拿不到用户名就绝不写标志，否则会锁到 unknown 上
+
                     console.warn("[LDH] 授权页显示无权限，但读不到账号名，未落标志");
                     return true;
                 }
                 if (!getNoOauth(who)) saveNoOauth(who, "connect-page");
+                const arFlow = gmGet(AR.FLOW, null);
+                if (cid === AR.CLIENT_ID && arFlow && arFlow.step === "authorizing" && Date.now() - arFlow.ts < 180000) {
+                    gmSet(AR.FLOW, { step: "done", ts: Date.now(), noOauth: true, error: NO_OAUTH_MSG });
+                }
                 return true;
             };
-            if (markDeniedHere()) return;      // 已确认无权限：不再等那个不存在的「允许」链接
+            if (markDeniedHere()) return;
 
-            /* 页面偶发晚渲染时观察一小会儿。observer 只做落标志，
-             * 不影响下面的自动点「允许」—— 两者互斥，命中就没有允许链接可点。 */
             let denyDone = false;
             const denyOb = new MutationObserver(function () {
                 if (denyDone) return;
@@ -968,10 +878,8 @@
             try { denyOb.observe(document.documentElement, { childList: true, subtree: true, characterData: true }); } catch (_) {}
             setTimeout(function () { denyDone = true; try { denyOb.disconnect(); } catch (_) {} }, 15000);
 
-            /* 1.0.7：无 OAuth 权限的号，授权页上压根没有「允许」链接，
-             * waitAndClick 会白白轮询满 30 秒才超时退出。直接不进这个分支。 */
-            if (clientAllowed(cid) && !getNoOauth(currentLdUser())) {
-                // 后台标签(hidden)里 getClientRects() 恒为 0，不能拿"看不见"当不点的理由
+            if (clientAllowed(cid) && !getNoOauth(authorizedUserFromPage() || currentLdUser())) {
+
                 const bg = document.visibilityState === "hidden";
                 waitAndClick(function () {
                     const links = Array.prototype.slice.call(document.querySelectorAll('a[href^="/oauth2/approve/"]'));
@@ -1007,7 +915,8 @@
         return;
     }
 
-    // ======================= linux.do 分支 =======================
+    if (location.hostname !== "linux.do") return;
+    // 论坛：三种模式、等级/积分、点赞与邀请。
     const COMMON = {
         MSECS_MIN: 800, MSECS_MAX: 1400,
         FLOOR_INTERVAL: 800,
@@ -1016,13 +925,11 @@
         ENTER_MIN: 700, ENTER_MAX: 1200,
         HARD_BLOCK_RETRY_THRESHOLD: 600, CF_BACKOFF_MS: 10000, MAX_CONSEC_CF: 5,
         LIKE_REACTION: "heart",
-        GITHUB_LIST_URL: "https://raw.githubusercontent.com/cler1818/Note/refs/heads/main/linuxdo/name.txt",
-        WHITELIST_CACHE_KEY: "ld_helper_whitelist",
         REQLOG_KEY: "ld_helper_reqlog", WINDOW_MS: 60 * 60 * 1000,
         WARN_REQ: 130, REFUSE_START: 165, HARD_STOP: 185, SAFE_RESUME: 120
     };
-    const GAP_MIN_MS = Math.max(COMMON.FLOOR_INTERVAL, Math.round(CFG.REQ_GAP_SEC[0] * 1000));
-    const GAP_MAX_MS = Math.max(GAP_MIN_MS + 1000, Math.round(CFG.REQ_GAP_SEC[1] * 1000));
+    const GAP_MIN_MS = clamp(Math.round(Number(CFG.REQ_GAP_SEC[0]) * 1000) || COMMON.FLOOR_INTERVAL, COMMON.FLOOR_INTERVAL, 99000);
+    const GAP_MAX_MS = clamp(Math.round(Number(CFG.REQ_GAP_SEC[1]) * 1000) || GAP_MIN_MS, GAP_MIN_MS, 99000);
 
     const MODES = {
         daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 5, safety: 160,      noLimit: false },
@@ -1033,12 +940,30 @@
     function totalMs(M) { return M.minutes * 60 * 1000; }
 
     let running = false, abort = false, activeMode = "", startedAt = 0, csrf = "", consecCf = 0, uiTimer = null;
+    let engineController = null, consecutiveErrors = 0, stopReason = "";
+    async function engineFetch(url, options) {
+        if (abort || (activeMode && elapsed() >= totalMs(MODES[activeMode]))) return Promise.reject(new DOMException("已停止", "AbortError"));
+        const opts = Object.assign({}, options || {}, { signal: engineController ? engineController.signal : undefined });
+        const response = await fetchTimed(url, opts);
+        if ((opts.method || "GET") === "GET" && [401, 403, 429].indexOf(response.status) >= 0) {
+            const body = await response.clone().text();
+            stopEngine(response.status === 429 ? "读取接口被限流，已停止，请稍后再试。" :
+                CF_CHALLENGE_RE.test(body) ? "遇到验证页面，已停止，请先在网页完成验证。" : "登录已失效或没有访问权限，已停止。");
+        }
+        return response;
+    }
+    function stopEngine(reason) {
+        stopReason = reason || "已停止";
+        abort = true;
+        if (engineController) engineController.abort();
+        wakeAll();
+    }
     let finishedOnce = false, frozenTimer = "", banMsg = "", endNote = "";
     let syncState = "idle", syncAt = 0;
     let arState = "idle", arText = "", arBal = "";
     let anyState = "idle";
     let me = { username: "", trustLevel: null };
-    let summary = null, summaryState = "idle";     // TL0/1 的摘要统计
+    let summary = null, summaryState = "idle";
     let ldc = { state: "idle", value: "", msg: "" };
 
     let plan = { topics: 0, replies: 0, likes: 0 };
@@ -1049,9 +974,7 @@
     function readJson(k, fb) { try { const v = JSON.parse(localStorage.getItem(k) || "null"); return v === null ? fb : v; } catch (_) { return fb; } }
     function writeJson(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
     function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
-    /* readTL3 / getAnyBan 在 render 里每秒被调用多次，而 render 在刷帖时每秒跑一遍。
-     * 直接读 GM 存储 + JSON.parse 的话，500 分钟挂机会产生数万次同步读，明显拖慢页面。
-     * 这里做 3 秒的内存缓存；写入方（storeTL3 / saveAnyBan / clearAnyBan）负责失效。 */
+
     let _tl3Cache = { key: "", at: 0, v: null };
     function readTL3() {
         if (!me.username) return null;
@@ -1062,22 +985,19 @@
         _tl3Cache = { key: key, at: Date.now(), v: v };
         return v;
     }
-    // Q5：TL0/1 时 connect 拿不到明细，跳过同步；trust_level 未知(TL?)时仍同步
+
     function isLowTL() { return me.trustLevel !== null && me.trustLevel <= 1; }
 
-    /* ============================================================
-     * Credit 积分（Q6=a / Q7=90s / Q15 / Q11）
-     * ============================================================ */
     function creditBalKey(u) { return CREDIT.BALPREFIX + (normUser(u) || "unknown"); }
     function readCreditCache(u) {
         try {
             const v = JSON.parse(gmGet(creditBalKey(u), "null"));
-            if (v && v.day === todayStr() && v.v) return v;   // 跨天自动作废
+            if (v && v.day === todayStr() && v.v) return v;
         } catch (_) {}
         return null;
     }
     function writeCreditCache(u, val) { gmSet(creditBalKey(u), JSON.stringify({ v: val, at: Date.now(), day: todayStr() })); }
-    // toFixed(2) 后去掉尾随 0 → 1215.90 → 1215.9；1200.00 → 1200
+
     function fmtLdc(n) {
         const v = Number(n);
         if (!isFinite(v)) return "";
@@ -1093,20 +1013,14 @@
         }
         let b; try { b = JSON.parse(String(r.responseText || "").replace(/^﻿/, "")); }
         catch (_) { const e = new Error("Credit 返回非JSON"); e.needLogin = true; throw e; }
-        if (r.status >= 400 || b.error_msg) throw new Error(b.error_msg || ("HTTP " + r.status));
+        if (!b || r.status < 200 || r.status >= 300 || b.error_msg) throw new Error((b && b.error_msg) || ("HTTP " + r.status));
         const d = b && b.data;
         if (!d || d.available_balance === undefined || d.available_balance === null) throw new Error("缺少 available_balance");
         return { username: normUser(d.username), id: Number(d.id) || 0, balance: fmtLdc(d.available_balance) };
     }
 
-    /* ---- Credit 纯代码 OAuth（不开任何标签页）----
-     * 实测 GET /api/v1/oauth/state 返回 404，说明 state/nonce 是登录页前端自己生成的 UUID
-     * （此前抓包也确认两者是同一个 UUID）。所以这里自己生成一个，直接走授权流程：
-     *   生成UUID → GM请求 connect 授权页 → 解析"允许"链接 → GM请求它拿到 code
-     *   → GM请求 credit 回调种 Cookie → 读余额
-     * 全程 5 个跨域请求，2~3 秒完成，完全不受后台标签节流影响。 */
     function uuid4() {
-        // crypto.randomUUID 在部分旧内核里没有，退化到 getRandomValues 手拼
+
         try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (_) {}
         const b = new Uint8Array(16);
         try { crypto.getRandomValues(b); } catch (_) { for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256); }
@@ -1125,11 +1039,10 @@
         if (a.status >= 400 || CF_CHALLENGE_RE.test(a.responseText || "")) {
             throw arNonJsonError(a, a.finalUrl);
         }
-        // 之前授权过的话，授权页会直接 302 带回 code；否则要再点一次"允许"
+
         let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
         if (!cs) {
-            // 1.0.7：先分辨「用户组无权限」。原来这里一律报"登录态可能失效"，
-            // 把永久无权限误说成登录问题，然后还要白开一个 30 秒的兜底标签。
+
             if (detectNoOauth(a.responseText)) throw noOauthError();
             const ap = parseApprove(a.responseText);
             if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
@@ -1139,47 +1052,51 @@
             cs = paramsFrom(approved.finalUrl) || paramsFromText(approved.responseText);
         }
         if (!cs) throw new Error("授权完成但没返回code");
-        // 回调到 Credit 让它种下登录 Cookie（这一步是页面路由，返回 HTML 也算正常）
+        if (String(cs.state) !== String(st)) throw new Error("授权 state 不匹配，请重新登录。");
+
         await gmFetch(CREDIT.REDIRECT + "?code=" + encodeURIComponent(cs.code) + "&state=" + encodeURIComponent(cs.state), {
             headers: { "Accept": "text/html,application/xhtml+xml" }, timeout: 15000
         }).catch(function () {});
         return await creditUserInfo(CREDIT.API_TIMEOUT);
     }
 
-    /* ---- 前台标签兜底 ----
-     * 纯代码失败（多半是 Credit 的回调必须由前端 JS 完成）时，开一个前台标签让站点自己跑完。
-     * 用前台是因为后台标签会被 Chrome 节流：Next.js 的 JS 根本跑不完，登录按钮不会渲染。
-     * 拿到余额立刻关闭，最长 30 秒。 */
     function creditForegroundLogin() {
         return new Promise(function (resolve, reject) {
             let handle = null;
             try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1", { active: true, insert: true, setParent: true }); }
             catch (_) { handle = null; }
             if (!handle) { reject(new Error("无法打开标签")); return; }
-            const started = Date.now();
+            let settled = false, checking = false;
+            const user = me.username;
+            function done(error, info) {
+                if (settled) return;
+                settled = true; clearInterval(iv); clearTimeout(deadline);
+                try { handle.close(); } catch (_) {}
+                if (error) reject(error); else resolve(info);
+            }
+            const deadline = setTimeout(function () { done(new Error("授权超时，请完成网页验证后重试。")); }, CREDIT.TAB_TIMEOUT);
             const iv = setInterval(function () {
-                if (Date.now() - started > CREDIT.TAB_TIMEOUT) {
-                    clearInterval(iv); try { handle.close(); } catch (_) {}
-                    reject(new Error("超时")); return;
-                }
+                if (getNoOauth(user)) { done(noOauthError()); return; }
+                if (handle.closed) { done(new Error("授权标签已关闭。")); return; }
+                if (checking || settled) return;
+                checking = true;
                 creditUserInfo(CREDIT.API_TIMEOUT).then(function (info) {
-                    clearInterval(iv); try { handle.close(); } catch (_) {}
-                    resolve(info);
-                }).catch(function () { /* 还没登录完，继续等 */ });
+                    done(null, info);
+                }).catch(function () {}).finally(function () { checking = false; });
             }, 1000);
         });
     }
 
-    /* 刷新 LDC 积分
-     *   当天成功过 → 直接吃缓存，一个请求都不发
-     *   否则       → 纯代码；失败再开前台标签（受互斥锁保护，手动点击不受限）
-     *   失败不锁定当天，下次打开论坛重新走一遍 */
-    async function refreshCredit(manual) {
-        if (idleSuspended && !manual) return;    // 刷帖期间不发任何 Credit 请求
+    let creditJob = null;
+    function refreshCredit(manual) {
+        if (!creditJob) creditJob = refreshCreditOnce(manual).finally(function () { creditJob = null; });
+        return creditJob;
+    }
+    async function refreshCreditOnce(manual) {
+        if (idleSuspended && !manual) return;
         const u = me.username;
         if (!u) return;
-        // 1.0.7：已判定无 OAuth 权限 → 一个请求都不发。
-        // manual(点⟳恢复)时不受此限，由 retryOauth 先清标志再进来。
+
         if (!manual && getNoOauth(u)) { ldc = { state: "nooauth", value: "", msg: NO_OAUTH_MSG }; return; }
 
         if (!manual) {
@@ -1192,17 +1109,16 @@
         try { info = await creditUserInfo(CREDIT.API_TIMEOUT); }
         catch (e) {
             if (!e || !e.needLogin) { ldc = { state: "fail", value: "", msg: (e && e.message) || "读取失败" }; render(); return; }
-            // 未登录 → 先试纯代码
+
             try { info = await creditCodeLogin(); }
             catch (e2) {
-                /* 1.0.7：用户组无权限 —— 落永久标志并立刻收手。
-                 * 开前台标签也是同一个授权页，照样被拒，只会白抢焦点干等 30 秒。 */
+
                 if (e2 && e2.noOauth) {
                     saveNoOauth(u, "credit", me.trustLevel);
                     ldc = { state: "nooauth", value: "", msg: NO_OAUTH_MSG };
                     render(); return;
                 }
-                // 纯代码也不行 → 前台标签兜底。没登录论坛时开了也是白开
+
                 if (!me.username) { ldc = { state: "fail", value: "", msg: "未登录 LINUX DO" }; render(); return; }
                 if (!manual && !acquireTabLock()) {
                     ldc = { state: "fail", value: "", msg: "另一个标签正在登录，稍后重试" }; render(); return;
@@ -1217,7 +1133,7 @@
             }
         }
         if (!info) return;
-        // 账号核对：论坛和 Credit 登录的不是同一个号时，绝不把别人的余额当成你的
+
         if (info.username && normUser(u) && info.username !== normUser(u)) {
             ldc = { state: "mismatch", value: "", msg: "论坛 @" + u + " / Credit @" + info.username };
             render(); return;
@@ -1227,11 +1143,8 @@
         render();
     }
 
-    /* ============================================================
-     * summary.json（TL0/1 专用，需求 10）
-     * ============================================================ */
     async function fetchSummary(username) {
-        const r = await fetch("/u/" + encodeURIComponent(username) + "/summary.json", {
+        const r = await fetchTimed("/u/" + encodeURIComponent(username) + "/summary.json", {
             credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
         });
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -1248,7 +1161,7 @@
         };
     }
     function fmtK(v) { v = Number(v) || 0; return v < 1000 ? String(v) : (v / 1000).toFixed(1).replace(/\.0$/, "") + "k"; }
-    // Q11：1天9小时 → 9小时46分 → 46分钟 → 35秒
+
     function fmtDur(sec) {
         sec = Math.max(0, Number(sec) || 0);
         const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600),
@@ -1258,14 +1171,25 @@
         if (m > 0) return m + "分钟";
         return s + "秒";
     }
-    function loadSummary() {
-        if (!me.username) return;
+    function loadSummary(force) {
+        const user = me.username;
+        if (!user) return Promise.resolve();
+        const key = "ldh_summary_" + normUser(user), cached = readJson(key, null);
+        if (!force && cached && cached.data && Date.now() - cached.at >= 0 && Date.now() - cached.at < SYNC_THROTTLE_MS) {
+            summary = cached.data; summaryState = "ok"; render(); return Promise.resolve();
+        }
+        if (summaryState === "loading") return Promise.resolve();
         summaryState = "loading"; render();
-        fetchSummary(me.username).then(function (s) { summary = s; summaryState = "ok"; render(); })
-            .catch(function () { summary = null; summaryState = "fail"; render(); });
+        return fetchSummary(user).then(function (s) {
+            writeJson(key, { at: Date.now(), data: s });
+            if (me.username !== user) return;
+            summary = s; summaryState = "ok"; render();
+        }).catch(function () {
+            if (me.username !== user) return;
+            summary = null; summaryState = "fail"; render();
+        });
     }
 
-    // ---- 后台同步等级3（I2：删除前台兜底）----
     function syncViaXhr(onFail) {
         if (typeof GM_xmlhttpRequest !== "function") { onFail("nogrant"); return; }
         syncState = "syncing"; render();
@@ -1277,6 +1201,8 @@
                 if (CF_CHALLENGE_RE.test(html) && !/tl3-ring|empty-state/.test(html)) { onFail("cf"); return; }
                 let doc; try { doc = new DOMParser().parseFromString(html, "text/html"); } catch (_) { onFail("err"); return; }
                 const data = parseConnectRoot(doc);
+                if (resp.status < 200 || resp.status >= 300) { onFail("err"); return; }
+                if (data && data.account && normUser(data.account) !== normUser(me.username)) { onFail("otheruser"); return; }
                 if (data && storeTL3(data, me.username)) { _tl3Cache = { key: "", at: 0, v: null }; syncAt = Date.now(); syncState = readTL3() ? "ok" : "otheruser"; render(); }
                 else { onFail("empty"); }
             },
@@ -1285,9 +1211,9 @@
         });
     }
     function openConnectTab() {
-        // I2：只后台开，不做前台兜底
+
         syncState = "opening"; render();
-        // 轮询要拿"最新写入时间"来判断后台标签是否已完成，必须绕过 readTL3 的 3 秒缓存
+
         const rawTL3 = function () {
             if (!me.username) return null;
             try { const s = GM_getValue("ld_tl3_" + me.username.toLowerCase(), ""); return s ? JSON.parse(s) : null; } catch (_) { return null; }
@@ -1309,58 +1235,56 @@
             else if (n > 14) { clearInterval(iv); try { if (handle.close) handle.close(); } catch (_) {} syncState = "empty"; render(); }
         }, 1500);
     }
-    /* ---- 无 OAuth 权限的手动恢复（1.0.7）----
-     * 标志是一次命中即永久、且面板上什么都不显示，所以必须留一个人能走的恢复入口。
-     * 挂在标题栏 ⟳ 上：先清标志，再强制跑一遍 LDC 和 Agent。
-     *   成功  → 标志不会被重新写上，以后永久正常显示
-     *   仍被拒 → 两条路径各自把标志重新落上，这里弹红字 toast 告诉你结果
-     * oauthRetrying 期间 ldcSpan/arSpan 会临时把两段显示出来（"获取中"），
-     * 否则整段隐藏会让你完全看不出点了 ⟳ 有没有反应。 */
+
     let oauthRetrying = false;
     async function retryOauth() {
         const u = me.username;
-        if (!u || oauthRetrying) return;
+        if (!u || oauthRetrying || arState === "running" || creditJob) return;
         oauthRetrying = true;
         clearNoOauth(u);
         ldc = { state: "loading", value: "", msg: "重新检查授权权限…" };
-        arState = "running"; arText = "重新检查授权权限…"; arBal = "";
+        arState = "idle"; arText = "重新检查授权权限…"; arBal = "";
         render();
         try { await refreshCredit(true); } catch (_) {}
         try { await runArCheckin(true); } catch (_) {}
         oauthRetrying = false;
         if (getNoOauth(u)) {
             ldhToast(NO_OAUTH_MSG + "，LDC / Agent / Any 保持停用。", "error");
-        } else {
+        } else if (ldc.state === "ok" || arState === "ok") {
             ldhToast("授权权限已恢复，LDC / Agent / Any 重新启用。", "success");
+        } else {
+            ldhToast("授权重试尚未成功，请查看 LDC / Agent 的错误提示。", "error");
         }
         render();
     }
     function sync() {
-        /* 1.0.8 修：这里【绝不能】调 retryOauth。
-         * sync() 不区分来源，而 createUI 的自动等级同步也会调它 ——
-         * 那样每次打开论坛都会 clearNoOauth() 把永久标志清掉再强制重试一遍，
-         * 「永久停用」就完全失效了。手动恢复入口只挂在 ⟳ 的 click 监听上。 */
-        // Q9=b：TL0/1 时 ⟳ 改成刷新 summary.json
-        if (isLowTL()) { loadSummary(); return; }
+
+        if (!me.username) return;
+        if (isLowTL()) { loadSummary(true); return; }
         if (syncState === "syncing" || syncState === "opening") return;
-        syncViaXhr(function () { openConnectTab(); });
+        syncViaXhr(function (reason) {
+            syncState = reason; render();
+            if (reason !== "otheruser") openConnectTab();
+        });
     }
 
-    // ---- 频率窗口 ----
-    function logTimingReq() { const a = readJson(COMMON.REQLOG_KEY, []).filter(function (t) { return Date.now() - t < COMMON.WINDOW_MS; }); a.push(Date.now()); writeJson(COMMON.REQLOG_KEY, a); }
-    function recentTimingCount() { return readJson(COMMON.REQLOG_KEY, []).filter(function (t) { return Date.now() - t < COMMON.WINDOW_MS; }).length; }
+    function recentTimings() {
+        const entries = readJson(COMMON.REQLOG_KEY, []), now = Date.now();
+        return Array.isArray(entries) ? entries.filter(function (t) { return Number.isFinite(t) && t <= now && now - t < COMMON.WINDOW_MS; }) : [];
+    }
+    function logTimingReq() { const a = recentTimings(); a.push(Date.now()); writeJson(COMMON.REQLOG_KEY, a); }
+    function recentTimingCount() { return recentTimings().length; }
     function budgetHit() {
         const M = MODES[activeMode];
         if (!M || M.noLimit) return false;
         return recentTimingCount() >= COMMON.HARD_STOP || sent.timingReq >= M.safety;
     }
     function minutesUntilBelow(target) {
-        const now = Date.now(); const arr = readJson(COMMON.REQLOG_KEY, []).filter(function (t) { return now - t < COMMON.WINDOW_MS; }).sort(function (a, b) { return a - b; });
+        const now = Date.now(); const arr = recentTimings().sort(function (a, b) { return a - b; });
         if (arr.length <= target) return 0;
         return Math.max(1, Math.ceil((arr[arr.length - target - 1] + COMMON.WINDOW_MS - now) / 60000));
     }
 
-    /* ---- 核心调度：间隔真随机 + 全程铺满 ---- */
     function schedule(T) {
         const M = MODES[activeMode];
         const remTime = Math.max(0, T - elapsed());
@@ -1374,7 +1298,7 @@
         const avg = remTime / minReq;
         let interval, cap, estReq, batchOverride = null;
         if (M && M.fullRandom) {
-            cap = clamp(Math.round(avg * 2), GAP_MIN_MS + 200, GAP_MAX_MS);
+            cap = clamp(Math.round(avg * 2), GAP_MIN_MS, GAP_MAX_MS);
             interval = randInt(GAP_MIN_MS, cap);
             estReq = Math.max(1, Math.round(remTime / Math.max(1, cap / 2)));
         } else {
@@ -1389,8 +1313,8 @@
             const overhead = rt * COMMON.TOPIC_OVERHEAD_MS;
             const usable = Math.max(0, remTime - overhead);
             const avgGap = usable / budgetReq;
-            const lo = Math.max(GAP_MIN_MS, Math.round(avgGap * 0.4));
-            const hi = Math.max(lo + 500, Math.min(GAP_MAX_MS, Math.round(avgGap * 1.6)));
+            const lo = clamp(Math.round(avgGap * 0.4), GAP_MIN_MS, GAP_MAX_MS);
+            const hi = clamp(Math.round(avgGap * 1.6), lo, GAP_MAX_MS);
             interval = randInt(lo, hi);
             cap = hi;
             estReq = minReq;
@@ -1400,13 +1324,13 @@
         return { batch: batch, interval: interval, remReq: estReq, remTime: remTime, cap: cap };
     }
 
-    // ---- API ----
     function csrfMeta() { const m = document.querySelector('meta[name="csrf-token"]'); return m ? m.getAttribute("content") : ""; }
-    async function getCsrf() { let t = csrfMeta(); if (t) return t; try { const r = await fetch("/session/csrf.json", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); t = (await r.json()).csrf || ""; } catch (_) {} return t; }
-    // A1(b)：真实等级取 trust_level
-    async function getUser() {
+    async function getCsrf(signal) { let t = csrfMeta(); if (t) return t; try { const r = await fetchTimed("/session/csrf.json", { signal: signal, credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (r.ok) t = (await r.json()).csrf || ""; } catch (_) {} return t; }
+
+    async function getUser(signal) {
         try {
-            const r = await fetch("/session/current.json", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+            const r = await fetchTimed("/session/current.json", { signal: signal, credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+            if (!r.ok) return { username: "", trustLevel: null };
             const u = (await r.json()).current_user;
             if (u) {
                 const tl = (u.trust_level === undefined || u.trust_level === null) ? null : Number(u.trust_level);
@@ -1417,7 +1341,7 @@
     }
     async function enterTopic(id) {
         try {
-            const r = await fetch("/t/" + id + ".json?track_visit=true&forceLoad=true", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest", "Discourse-Logged-In": "true", "Discourse-Present": "true", "Discourse-Track-View": "true", "Discourse-Track-View-Topic-Id": String(id), "X-CSRF-Token": csrf } });
+            const r = await engineFetch("/t/" + id + ".json?track_visit=true&forceLoad=true", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest", "Discourse-Logged-In": "true", "Discourse-Present": "true", "Discourse-Track-View": "true", "Discourse-Track-View-Topic-Id": String(id), "X-CSRF-Token": csrf } });
             if (!r.ok) return { ok: false }; const d = await r.json();
             return { ok: true, highest: Number(d.highest_post_number || (d.post_stream && d.post_stream.stream ? d.post_stream.stream.length : 0) || 0), lastRead: Number(d.last_read_post_number || (d.topic_user && d.topic_user.last_read_post_number) || 0) };
         } catch (_) { return { ok: false }; }
@@ -1427,32 +1351,79 @@
         nums.forEach(function (n) { const ms = randInt(COMMON.MSECS_MIN, COMMON.MSECS_MAX); total += ms; p.set("timings[" + n + "]", String(ms)); });
         p.set("topic_time", String(total));
         let resp, body = "", ra = "", ct = "";
-        try { resp = await fetch("/topics/timings", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest", "Discourse-Present": "true" }, body: p.toString() }); }
+        try { resp = await engineFetch("/topics/timings", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest", "Discourse-Present": "true" }, body: p.toString() }); }
         catch (e) { return { kind: "neterr" }; }
         try { ra = resp.headers.get("Retry-After") || ""; } catch (_) {}
         try { ct = resp.headers.get("Content-Type") || ""; } catch (_) {}
         try { body = await resp.text(); } catch (_) {}
-        return { kind: classify(resp.status, body, ra, ct) };
+        return { kind: classify(resp.status, body, ra, ct), retryMs: retryDelay(ra, body) };
+    }
+    function retryDelay(ra, body) {
+        const value = String(ra || "").trim();
+        const header = /^\d+(\.\d+)?$/.test(value) ? Number(value) * 1000 : Math.max(0, Date.parse(value) - Date.now()) || 0;
+        let seconds = 0;
+        try { seconds = Math.max(0, Number(JSON.parse(body).extras.wait_seconds) || 0); } catch (_) {}
+        return Math.max(header, seconds * 1000);
     }
     function classify(status, body, ra, ct) {
-        if (status >= 200 && status < 300) return "ok";
         if (CF_CHALLENGE_RE.test(body || "")) return "cloudflare";
-        if (status === 429) { const hw = /^\d+(\.\d+)?$/.test((ra || "").trim()) ? Number(ra) : 0; let bw = 0; try { bw = Number(JSON.parse(body).extras.wait_seconds) || 0; } catch (_) {} return (hw >= COMMON.HARD_BLOCK_RETRY_THRESHOLD || /slow down/i.test(body || "") || (Math.max(hw, bw) === 0 && /text\/plain/i.test(ct || ""))) ? "discourse_hard" : "discourse_soft"; }
+        if (status >= 200 && status < 300) return /text\/html/i.test(ct || "") ? "other" : "ok";
+        if (status === 401 || status === 403) return "auth_error";
+        if (status === 429) { const delay = retryDelay(ra, body); return (delay >= COMMON.HARD_BLOCK_RETRY_THRESHOLD * 1000 || /slow down/i.test(body || "") || (delay === 0 && /text\/plain/i.test(ct || ""))) ? "discourse_hard" : "discourse_soft"; }
         if (status >= 500) return "server_error";
         return "other";
     }
-    async function getReacted(postId) { try { const r = await fetch("/posts/" + postId + ".json", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (!r.ok) return false; const d = await r.json(); return !!(d.current_user_reaction || d.current_user_used_main_reaction); } catch (_) { return false; } }
-    async function likeToggle(postId) { try { const r = await fetch("/discourse-reactions/posts/" + postId + "/custom-reactions/" + COMMON.LIKE_REACTION + "/toggle.json", { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Accept": "*/*", "X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest", "Discourse-Logged-In": "true", "Discourse-Present": "true" } }); return r.status; } catch (_) { return 0; } }
-    function parseNames(t) { const seen = new Set(), out = []; String(t || "").split(/\r?\n/).forEach(function (l) { const n = l.replace(/^﻿/, "").trim(); if (!n || n[0] === "#" || n.startsWith("//")) return; const k = n.toLowerCase(); if (seen.has(k)) return; seen.add(k); out.push(n); }); return out; }
-    async function loadNames() { try { const r = await fetch(COMMON.GITHUB_LIST_URL, { cache: "no-store" }); if (!r.ok) throw 0; const n = parseNames(await r.text()); if (n.length) { writeJson(COMMON.WHITELIST_CACHE_KEY, n); return n; } throw 0; } catch (_) { const c = readJson(COMMON.WHITELIST_CACHE_KEY, []); return Array.isArray(c) ? c : []; } }
+    function reactionState(data) {
+        if (!data || typeof data !== "object") return null;
+        const actions = Array.isArray(data.actions_summary) ? data.actions_summary : null;
+        if (data.current_user_reaction || data.current_user_used_main_reaction === true ||
+            (actions && actions.some(function (a) { return a.id === 2 && a.acted === true; }))) return true;
+        return ("current_user_reaction" in data || "current_user_used_main_reaction" in data || actions) ? false : null;
+    }
+    async function getReacted(postId) {
+        try {
+            const r = await engineFetch("/posts/" + postId + ".json", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+            return r.ok ? reactionState(await r.json()) : null;
+        } catch (_) { return null; }
+    }
+    async function likeToggle(postId) {
+        try {
+            const r = await engineFetch("/discourse-reactions/posts/" + postId + "/custom-reactions/" + COMMON.LIKE_REACTION + "/toggle.json", { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest", "Discourse-Logged-In": "true", "Discourse-Present": "true" } });
+            let reacted = null;
+            try { reacted = reactionState(await r.json()); } catch (_) {}
+            return { status: r.status, reacted: reacted };
+        } catch (_) { return { status: 0, reacted: null }; }
+    }
+    function parseNames(text) {
+        const seen = new Set(), names = [];
+        accountFileLines(text).forEach(function (line, i) {
+            if (!line.trim() || /^\s*(?:#|\/\/)/.test(line)) return;
+            let name;
+            try { name = loginCredentials(line).username; }
+            catch (_) { throw new Error("账号文件第 " + (i + 1) + " 行格式不正确。"); }
+            if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name)) throw new Error("第 " + (i + 1) + " 行需填写论坛用户名，点赞不能使用邮箱。");
+            const key = normUser(name);
+            if (!seen.has(key)) { seen.add(key); names.push(name); }
+        });
+        return names;
+    }
+    async function loadNames() {
+        try {
+            const names = parseNames(await loginReadAccounts(engineController ? engineController.signal : undefined));
+            if (!names.length) throw new Error("账号文件没有可用用户名。");
+            return names;
+        } catch (e) {
+            if (!abort) { endNote = "已跳过点赞：" + (e.message || "私库读取失败"); render(); }
+            return [];
+        }
+    }
     async function fetchUserPosts(u) {
-        async function one(f) { try { const r = await fetch("/user_actions.json?username=" + encodeURIComponent(u) + "&filter=" + f + "&limit=30&offset=0", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (!r.ok) return []; const d = await r.json(); return Array.isArray(d.user_actions) ? d.user_actions : []; } catch (_) { return []; } }
+        async function one(f) { try { const r = await engineFetch("/user_actions.json?username=" + encodeURIComponent(u) + "&filter=" + f + "&limit=30&offset=0", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (!r.ok) return []; const d = await r.json(); return Array.isArray(d.user_actions) ? d.user_actions : []; } catch (_) { return []; } }
         const items = (await one(4)).concat(await one(5)), out = [], seen = new Set();
         items.forEach(function (it) { if (!it || it.deleted || it.hidden || !it.topic_id || !it.post_id) return; if (!it.username || String(it.username).toLowerCase() !== u.toLowerCase()) return; const k = it.topic_id + ":" + it.post_id; if (seen.has(k)) return; seen.add(k); out.push({ topicId: String(it.topic_id), postId: String(it.post_id) }); });
         return shuffle(out);
     }
 
-    /* ---- 主题池 ---- */
     const TOPIC_SOURCES = [
         "/top.json?period=all", "/top.json?period=yearly", "/top.json?period=quarterly",
         "/top.json?period=monthly", "/latest.json?order=posts", "/latest.json"
@@ -1462,18 +1433,17 @@
         reset: function () { this.queue = []; this.seen = new Set(); this.src = 0; this.page = 0; this.exhausted = false; }
     };
     async function listTopics(url) {
-        try { const r = await fetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); return ((await r.json()).topic_list || {}).topics || []; } catch (_) { return []; }
+        try { const r = await engineFetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (!r.ok) return []; const topics = ((await r.json()).topic_list || {}).topics; return Array.isArray(topics) ? topics : []; } catch (_) { return []; }
     }
     async function refillPool(minPosts) {
         let rounds = 0;
         const M = MODES[activeMode];
-        const stillNeed = M ? Math.max(0, plan.topics - sent.topics) : 40;
-        const target = Math.max(40, Math.min(120, stillNeed + 20));
-        while (pool.queue.length < target && rounds < 40 && !pool.exhausted && !abort) {
+        while (pool.queue.length < 40 && rounds < 40 && !pool.exhausted && !abort && (!M || elapsed() < totalMs(M))) {
             rounds++;
             const base = TOPIC_SOURCES[pool.src];
             const url = base + (base.indexOf("?") >= 0 ? "&" : "?") + "per_page=50&page=" + pool.page;
             const raw = await listTopics(url);
+            if (abort) return false;
             const fresh = [];
             raw.forEach(function (t) {
                 const id = t && t.id ? String(t.id) : "";
@@ -1482,12 +1452,10 @@
                 if (h >= minPosts && Number(t.last_read_post_number || 0) < h) { pool.seen.add(id); fresh.push(id); }
             });
             pool.queue = pool.queue.concat(shuffle(fresh));
-            if (raw.length < 10 || !fresh.length) {
-                pool.src++;
-                if (pool.src >= TOPIC_SOURCES.length) {
-                    pool.src = 0; pool.page++;
-                    if (pool.page > 30) pool.exhausted = true;
-                }
+            pool.src++;
+            if (pool.src >= TOPIC_SOURCES.length) {
+                pool.src = 0; pool.page++;
+                if (pool.page > 30) pool.exhausted = true;
             }
             await sleep(randInt(150, 350));
         }
@@ -1498,7 +1466,6 @@
         return pool.queue.shift() || "";
     }
 
-    /* ---- 点赞 ---- */
     let likeSlots = [], likeNames = [], likeNameIdx = 0, likeCands = [], likeDead = false;
     function buildLikeSlots(T, n) {
         const a = [];
@@ -1516,11 +1483,20 @@
             }
             const c = likeCands.shift();
             if (handledLikeTopics.has(c.topicId)) continue;
-            if (await getReacted(c.postId)) { handledLikeTopics.add(c.topicId); await sleep(250); continue; }
-            const code = await likeToggle(c.postId);
+            const reacted = await getReacted(c.postId);
+            if (abort) return false;
+            if (reacted !== false) { handledLikeTopics.add(c.topicId); await sleep(250); continue; }
+            const result = await likeToggle(c.postId);
+            if (abort) return false;
+            const code = result.status;
+            if (code >= 200 && code < 300) {
+                handledLikeTopics.add(c.topicId);
+                const confirmed = result.reacted === null ? await getReacted(c.postId) : result.reacted;
+                if (confirmed === true) { sent.likes++; render(); return true; }
+            }
             await sleep(randInt(600, 1100));
-            if (code >= 200 && code < 300) { sent.likes++; handledLikeTopics.add(c.topicId); render(); return true; }
             if (code === 429) { likeDead = true; likeSlots = []; endNote = "点赞被限流"; return false; }
+            if (code === 401 || code === 403) { likeDead = true; likeSlots = []; endNote = "点赞失败：登录已失效或没有权限"; return false; }
         }
         return false;
     }
@@ -1531,13 +1507,17 @@
         }
     }
 
-    // ---- 引擎 ----
     async function engine(mode) {
         const M = MODES[mode];
         const T = totalMs(M);
-        me = await getUser(); if (!me.username) return finish("未登录", "未登录");
+        const signal = engineController.signal;
+        me = await getUser(signal);
+        if (abort) return finish("stopped", stopReason || "已停止");
+        if (!me.username) return finish("未登录", "未登录");
         gmSet(LD_USER_KEY, normUser(me.username));
-        csrf = await getCsrf(); if (!csrf) return finish("无CSRF", "无CSRF");
+        csrf = await getCsrf(signal);
+        if (abort) return finish("stopped", stopReason || "已停止");
+        if (!csrf) return finish("无CSRF", "无CSRF");
 
         plan.topics = randInt(M.topics[0], M.topics[1]);
         plan.replies = randInt(M.replies[0], M.replies[1]);
@@ -1550,6 +1530,7 @@
             likeNames = shuffle((await loadNames()).filter(function (n) { return n && n.toLowerCase() !== me.username.toLowerCase(); }));
             if (!likeNames.length) likeDead = true;
         }
+        if (abort) return finish("stopped", stopReason || "已停止");
 
         pool.reset();
 
@@ -1559,6 +1540,7 @@
             if (abort || elapsed() >= T) break;
 
             const tid = await nextTopic(M.minPosts);
+            if (abort || elapsed() >= T) break;
             if (!tid) {
                 const s = schedule(T);
                 await sleep(Math.min(s.interval, 5000));
@@ -1567,6 +1549,7 @@
             }
 
             const meta = await enterTopic(tid);
+            if (abort || elapsed() >= T) break;
             await sleep(randInt(COMMON.ENTER_MIN, COMMON.ENTER_MAX));
             if (!meta.ok || meta.highest < 2) continue;
 
@@ -1591,75 +1574,72 @@
                 const batch = nums.slice(p, p + take);
                 if (!batch.length) break;
                 sent.timingReq++;
+                logTimingReq();
                 const res = await postTimings(tid, batch);
+                if (abort) break;
                 if (res.kind === "ok") {
-                    consecCf = 0; logTimingReq();
+                    consecCf = 0; consecutiveErrors = 0;
                     sent.replies += batch.length;
                     if (!readThis) { sent.topics++; readThis = true; }
                     render();
                     p += batch.length;
-                    await sleep(s.interval);
+                    await sleep(Math.min(s.interval, Math.max(0, T - elapsed())));
                 } else if (res.kind === "discourse_hard") {
-                    return finish("24h封禁", "该号24h封禁中");
+                    return finish("限流", "服务器要求暂停，已停止，请稍后再试。");
+                } else if (res.kind === "auth_error") {
+                    return finish("登录失效", "登录已失效或没有权限，请重新登录。");
                 } else if (res.kind === "cloudflare") {
-                    consecCf++; if (consecCf >= COMMON.MAX_CONSEC_CF) break;
+                    consecCf++; if (consecCf >= COMMON.MAX_CONSEC_CF) return finish("验证", "连续遇到验证页面，已停止，请先在网页完成验证。");
                     await sleep(COMMON.CF_BACKOFF_MS);
                 } else if (res.kind === "discourse_soft") {
-                    await sleep(8000);
+                    await sleep(Math.min(Math.max(8000, res.retryMs || 0), Math.max(0, T - elapsed())));
                 } else {
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= 5) return finish("网络异常", "连续请求失败，已停止，请检查网络或稍后重试。");
                     await sleep(1500);
                 }
             }
         }
-        while (likeSlots.length && !likeDead && !abort) { likeSlots.shift(); await doOneLike(); }
-        finish("done");
+        finish(abort ? "stopped" : "done", abort ? (stopReason || "已停止") : "");
     }
 
     function finish(reason, note) {
         const M = MODES[activeMode]; const used = M ? Math.min(elapsed(), totalMs(M)) : elapsed();
         running = false; finishedOnce = true; if (uiTimer) { clearInterval(uiTimer); uiTimer = null; }
+        if (engineController) { engineController.abort(); engineController = null; }
+        wakeAll();
         frozenTimer = "⏱ " + mmss(used); if (note) endNote = note; activeMode = "";
         writeJson("ld_helper_last", { at: Date.now(), sent: { topics: sent.topics, replies: sent.replies, likes: sent.likes }, frozen: frozenTimer, endNote: endNote });
         restoreButtons();
-        resumeIdleWork();          // 运行期被冻结的观察器/后台任务，收工后恢复
+        resumeIdleWork();
         render();
     }
     function startMode(mode) {
-        // 再点一次同一个按钮 = 停止。wakeAll() 让正在 sleep 的调度立刻醒来，
-        // 不必等剩余间隔（挂机模式最长 60 秒）跑完，点了就有反应。
-        if (running) { if (mode === activeMode) { abort = true; wakeAll(); } return; }
+
+        if (running) { if (mode === activeMode) stopEngine(); return; }
         const M = MODES[mode];
+        if (!M) return;
         if (!M.noLimit) {
             const rc = recentTimingCount();
             if (rc >= COMMON.REFUSE_START) { banMsg = "⛔ 本窗口已发" + rc + "次，约" + minutesUntilBelow(COMMON.SAFE_RESUME) + "分钟后再来"; finishedOnce = false; render(); return; }
         }
         banMsg = ""; endNote = ""; frozenTimer = ""; running = true; abort = false; activeMode = mode; startedAt = Date.now(); consecCf = 0;
+        engineController = new AbortController(); consecutiveErrors = 0; stopReason = "";
         sent.topics = 0; sent.replies = 0; sent.likes = 0; sent.timingReq = 0; handledLikeTopics.clear();
         plan.topics = 0; plan.replies = 0; plan.likes = 0;
-        suspendIdleWork();         // 刷帖期间只做刷帖，其它全停
+        suspendIdleWork();
         markButtons(mode); if (uiTimer) clearInterval(uiTimer); uiTimer = setInterval(render, 1000); render();
         engine(mode).catch(function (e) { finish("异常", "异常:" + (e && e.message || e)); });
     }
 
-    /* ============================================================
-     * AR 每日签到
-     * 签到和余额【分开锁定】：
-     *   DAYKEY 记"今天签过了"，BALDAY 记"今天余额读到了"。
-     *   AgentRouter 一天只给一次奖励，所以签过就绝不重签；
-     *   余额没读到只补查余额，不再白跑一遍完整 OAuth。
-     * 三种进入路径：
-     *   两个都锁定了     → 一个请求都不发，直接吃缓存
-     *   只签到锁定了     → 只补查余额（不退出登录、不重新授权）
-     *   都没锁定         → 走完整签到流程
-     * 手动点 R1 的 Agent 文字 = force，强制重签 + 刷新余额，不受任何限制。
-     * ============================================================ */
+    function arSuccessText() {
+        return gmGet(AR.REWARDKEY, "") === todayStr() ? "签到成功" : "今日登录签到已处理，接口未确认新增签到奖励";
+    }
     function runArCheckin(force) {
+        if (!me.username) return Promise.resolve();
         if (arState === "running") return Promise.resolve();
-        if (idleSuspended && !force) return Promise.resolve();       // 刷帖期间不跑签到
-        /* 1.0.7：已判定无 OAuth 权限 → 一个请求都不发。
-         * 注意这里连 arCheckin 开头那次 /api/user/logout 都省掉了 ——
-         * 那次退出登录是为重新授权做准备的，既然授权必被拒，就没有任何意义。
-         * force(点⟳恢复)时不受此限，由 retryOauth 先清标志再进来。 */
+        if (idleSuspended && !force) return Promise.resolve();
+
         if (!force && getNoOauth(me.username)) {
             arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
             return Promise.resolve();
@@ -1669,51 +1649,51 @@
         const balToday = gmGet(AR.BALDAY, "") === today;
 
         if (!force && signedToday && balToday) {
-            // 两件事今天都成了：直接读缓存，零请求
+
             const saved = loadArNote();
             if (saved && saved.bal) { arState = saved.state; arText = saved.text; arBal = saved.bal; }
-            else { arState = "ok"; arText = "签到成功"; arBal = gmGet(AR.BALKEY, "") || ""; }
+            else { arState = "ok"; arText = arSuccessText(); arBal = gmGet(AR.BALKEY, "") || ""; }
             render(); return Promise.resolve();
         }
 
         if (!force && signedToday) {
-            // 今天已签到，只是余额没读到 —— 只补查余额，绝不重复签到
+
             arState = "running"; arText = "读取余额中…"; arBal = ""; render();
             return arBalance(null, { retries: 3 }).then(function (bal) {
-                arState = "ok"; arText = "签到成功"; arBal = bal;
+                arState = "ok"; arText = arSuccessText(); arBal = bal;
                 gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
                 render();
             }).catch(function (e) {
-                // 签到本身是成功的，只是余额读不到 → 待刷新，不是失败
+
                 arState = "pending"; arBal = "";
-                arText = "签到已成功，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
+                arText = "今日登录签到已处理，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
                 saveArNote("pending", arText, "");
                 render();
             });
         }
 
         arState = "running"; arText = "签到中…"; arBal = ""; render();
-        // 内部进度(退出登录/获取state/…)只进 arText 供 tooltip 用，面板固定显示"签到中…"
+
         return arCheckin(function (s) { arText = s; }, force).then(function (r) {
-            // 签到这一步已经成功，先把它锁住，后面余额失败也不用重签
+            if (r && r.checkedIn) gmSet(AR.REWARDKEY, today);
+            const checkinText = arSuccessText();
+
             gmSet(AR.DAYKEY, today);
-            /* 关键：GM 请求完成 OAuth 回调后，Set-Cookie 写进浏览器还需要一点时间。
-             * 立刻查余额多半会 401（这就是"刷新一下就好了"的原因），所以先等 800ms。 */
+
             return arBalance(r && r.user, { waitFirst: 800, retries: 3 }).then(function (bal) {
-                arState = "ok"; arText = "签到成功"; arBal = bal;
+                arState = "ok"; arText = checkinText; arBal = bal;
                 gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
                 render();
             }).catch(function (e) {
                 arState = "pending"; arBal = "";
-                arText = "签到已成功，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
+                arText = "今日登录签到已处理，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
                 saveArNote("pending", arText, "");
                 render();
             });
         }).catch(function (e) {
-            /* 1.0.7：用户组无权限 —— 落永久标志。
-             * 不写 arNote：那份笔记是给"失败原因"用的，而这不是故障，是这个号就没权限。 */
+
             if (e && e.noOauth) {
                 saveNoOauth(me.username, "agentrouter", me.trustLevel);
                 arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
@@ -1724,10 +1704,10 @@
             render();
         });
     }
-    // 在 AgentRouter 标签页手动登录后回写的余额：切回论坛时取一次，只覆盖余额
+
     function pullSideBalance() {
         if (idleSuspended) return;
-        if (getNoOauth(me.username)) return;   // 1.0.7：锁上后不可能有余额回写
+        if (getNoOauth(me.username)) return;
 
         try {
             const v = JSON.parse(gmGet(AR.SIDEKEY, "null"));
@@ -1736,18 +1716,15 @@
             if (v.bal === arBal) return;
             arBal = v.bal;
             gmSet(AR.BALKEY, v.bal); gmSet(AR.BALDAY, todayStr());
-            // 你在 AgentRouter 标签手动登录后拿到了余额，"待刷新"就该转成成功
-            if (arState === "pending") { arState = "ok"; arText = "签到成功"; }
+
+            if (arState === "pending") { arState = "ok"; arText = arSuccessText(); }
             if (arState === "ok") saveArNote(arState, arText, arBal);
             render();
         } catch (_) {}
     }
 
-    /* ============================================================
-     * UI
-     * ============================================================ */
     function mSpan(label, m) { if (!m) return ""; const ok = (m.c || 0) >= (m.r || 0); return '<span style="color:' + (ok ? "#8fe0b0" : "#ff8a8a") + ';">' + label + fmtNum(m.c) + "/" + fmtNum(m.r) + "</span>"; }
-    // C3：被举报→r2 末尾，举报用户/禁言/封禁→r3 末尾；仅 >0 时显示（C2=a）
+
     function complianceFor(row) {
         const raw = readTL3();
         if (!raw || raw.locked || !raw.compliance) return "";
@@ -1762,7 +1739,7 @@
         return v.length ? ' <span style="color:#ff8a8a;">⚠' + v.join(" ") + "</span>" : "";
     }
     function rowsForPanel() {
-        // 需求 10：TL0/1 显示 summary.json 六项（方案 C2，两行写全标签）
+
         if (isLowTL()) {
             if (summary) {
                 return [
@@ -1773,7 +1750,7 @@
             if (summaryState === "loading") return ["摘要读取中…", ""];
             return ["摘要读取失败，点⟳重试", ""];
         }
-        // TL2+ / TL?：走 connect 等级3进度
+
         const raw = readTL3();
         if (!raw) {
             const s = syncState === "syncing" ? "（后台同步中…）" : syncState === "opening" ? "（正在打开 connect 同步…）" : syncState === "popupblock" ? "（弹窗被拦，允许本站弹窗后再点⟳）" : syncState === "otheruser" ? "（connect 登录的是别的账号，用本号登录）" : syncState === "nogrant" ? "（缺跨域权限，去油猴放行 connect）" : "（点右上 ⟳ 同步，会自动开一次 connect）";
@@ -1782,11 +1759,7 @@
         if (raw.locked) return ["等级0/1 未到2级，暂时看不到进度", "达到2级后 connect 才显示明细"];
         const m = raw.metrics || {};
         const c2 = complianceFor(2), c3 = complianceFor(3);
-        /* 举报项只在 >0 时出现(C2=a)，此时行会变长：
-         *   r2 + "⚠被举报3"        = 252px（可用 249px，溢出 3px）
-         *   r3 + "⚠举报2 禁言1 封禁1" = 298px（溢出 49px，会把"封禁1"整个吃掉）
-         * 举报/禁言/封禁恰恰是最该看清的，所以这两行一旦挂上举报项就把指标标签缩写，
-         * 省下 30~40px。没有举报时(绝大多数情况)标签保持全称，显示完全不变。 */
+
         const A = c2
             ? [mSpan("访", m.visit_days), mSpan("题", m.topics_viewed), mSpan("帖", m.posts_viewed), mSpan("复", m.topics_replied)].filter(Boolean).join(" ")
             : [mSpan("访问", m.visit_days), mSpan("话题", m.topics_viewed), mSpan("帖子", m.posts_viewed), mSpan("回复", m.topics_replied)].filter(Boolean).join(" ");
@@ -1795,27 +1768,20 @@
             : [mSpan("点赞", m.likes_given), mSpan("获赞", m.likes_received), mSpan("获赞天数", m.liked_days), mSpan("获赞用户", m.liked_by_users)].filter(Boolean).join(" ");
         return [(A || "等级3 数据不全，去 connect 刷新") + c2, (B || "—") + c3];
     }
-    /* ---- R1 布局 ----
-     * 用户名   TL3   LDC：1215.9   Agent：$129.11              ⏱计时
-     * 四段之间各三个空格（两个 &nbsp; + 一个普通空格，纯空格会被 HTML 合并）。
-     * 实测(可用 249px)：10px 字号要 275px 放不下，降到 9px 后是 248px 刚好。
-     * 所以 R1 用 9px（面板 CSS 里已同步）。 */
+
     const SP3 = "&nbsp;&nbsp; ";
-    // 等级徽章：一律绿色；取不到 trust_level 显示 TL? 灰；未登录时整个不显示
+
     function tlBadge() {
         if (!me.username) return "";
         const tl = me.trustLevel;
         if (tl === null) return '<span style="color:#aaa;">' + SP3 + 'TL?</span>';
         return '<span style="color:#8fe0b0;">' + SP3 + "TL" + tl + "</span>";
     }
-    // LDC 三态：LDC：获取中 / LDC：1215.9 / LDC：失败
+
     function ldcSpan() {
         if (!me.username) return "";
         const base = '<span id="ldh_ldc" style="cursor:pointer;';
-        /* 1.0.7：无 OAuth 权限 → 红色「失败」，和普通失败同色同字，原因放 tooltip。
-         * 不做整段隐藏：面板上凭空少两段，反而会让人以为脚本没跑起来。
-         * 这里直接问标志而不是看 ldc.state —— 状态可能被别处覆盖成残留值，
-         * 而标志是权威的。retryOauth 期间放行，好让你看见"获取中"。 */
+
         if (!oauthRetrying && getNoOauth(me.username)) {
             return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "，已停止请求。点标题栏 ⟳ 可强制重试一次") + '">' + SP3 + "LDC：失败</span>";
         }
@@ -1827,31 +1793,21 @@
         if (ldc.state === "fail") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg || "读取失败，点击重试") + '">' + SP3 + "LDC：失败</span>";
         return base + 'color:#888;" title="点击读取 Credit 积分">' + SP3 + "LDC：获取中</span>";
     }
-    /* R1 上的 Agent 四态：
-     *   获取中   黄  正在签到或读余额
-     *   $129.11  绿  签到+余额都到手
-     *   待刷新   黄  签到确实成功了，只是余额没读到（点击可只补查余额）
-     *   失败     红  签到本身失败，tooltip 里有具体原因 */
+
     function arSpan() {
         if (!me.username) return "";
         const base = '<span id="ldh_arbal" style="cursor:pointer;';
-        if (!oauthRetrying && getNoOauth(me.username)) {          // 同 ldcSpan
+        if (!oauthRetrying && getNoOauth(me.username)) {
             return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "，已停止请求。点标题栏 ⟳ 可强制重试一次") + '">' + SP3 + "Agent：失败</span>";
         }
         if (arState === "running") return base + 'color:#e0c060;" title="' + esc(arText || "签到中") + '">' + SP3 + "Agent：获取中</span>";
         if (arState === "pending") return base + 'color:#e0c060;" title="' + esc(arText || "签到已成功，余额读取失败，点击重试") + '">' + SP3 + "Agent：待刷新</span>";
         if (arState === "fail") return base + 'color:#ff8a8a;" title="' + esc(arText || "签到失败") + '">' + SP3 + "Agent：失败</span>";
-        if (arState === "ok" && arBal) return base + 'color:#8fe0b0;" title="点击强制重新签到">' + SP3 + "Agent：" + esc(arBal) + "</span>";
-        if (arState === "ok") return base + 'color:#e0c060;" title="签到成功，余额读取中">' + SP3 + "Agent：获取中</span>";
+        if (arState === "ok" && arBal) return base + 'color:#8fe0b0;" title="' + esc(arText + "；点击重新登录签到") + '">' + SP3 + "Agent：" + esc(arBal) + "</span>";
+        if (arState === "ok") return base + 'color:#e0c060;" title="今日登录签到已处理，余额读取中">' + SP3 + "Agent：获取中</span>";
         return base + 'color:#888;" title="点击签到">' + SP3 + "Agent：获取中</span>";
     }
-    /* ---- r4 文案（实测宽度均在 249px 内，9px 字号）----
-     *   ① 未跑刷帖   Agent：签到成功 · 余额 $129.11          134px
-     *   ② 刷帖中     刷帖中：主题 1/16 丨 回复 13/210 丨 点赞 0/3   191~234px
-     *   ③ 刷帖结束   脚本结束：主题 1 丨 回复 13 丨 点赞 0      184px（不带 Agent，带上会溢出 12px）
-     *   ④ 未登录     脚本结束：主题 0 丨 回复 0 丨 点赞 0 ·未登录  184px
-     * 运行中的异常（本窗口达上限 / 24h封禁 / 点赞被限流）一律不显示，
-     * 只有"启动失败"类（未登录 / 无CSRF）才追加到 ③ 后面。 */
+
     const START_FAIL = ["未登录", "无CSRF"];
     function progressText() {
         const g = function (v) { return '<span style="color:#888;">/' + v + "</span>"; };
@@ -1863,15 +1819,11 @@
         }
         return "脚本结束：主题 " + sent.topics + " 丨 回复 " + sent.replies + " 丨 点赞 " + sent.likes;
     }
-    /* ---- r4 错误汇总 ----
-     * 平时完全空白；一旦哪里出错就把所有错误用 " / " 拼起来显示。
-     * 超过 22 字截断加省略号，完整内容进 tooltip（249px 放不下长错误信息）。
-     * Agent 的余额单独显示在 R1，所以这里只在它【失败或待刷新】时才补一条错误。 */
+
     const ERR_MAXLEN = 22;
     function collectErrors() {
         const list = [];
-        /* R1 上只显示了状态词（Agent：失败 / LDC：失败），看不出为什么失败，
-         * 所以 R4 这里补带原因的完整说明。"待刷新"R1 已经说清楚了，不重复。 */
+
         if (arState === "fail") list.push({ t: "Agent：" + (arText || "签到失败"), full: arText || "签到失败" });
         if (ldc.state === "fail") list.push({ t: "LDC：" + (ldc.msg || "读取失败"), full: ldc.msg || "读取失败" });
         else if (ldc.state === "mismatch") list.push({ t: "LDC：账号不符", full: ldc.msg || "论坛账号与 Credit 账号不同" });
@@ -1886,7 +1838,7 @@
         const list = collectErrors();
         if (!list.length) return "";
         const joined = list.map(function (x) { return x.t; }).join(" / ");
-        // tooltip 给完整信息：t 已经包含详情时就不再重复贴 full
+
         const full = list.map(function (x) {
             return (x.full && x.t.indexOf(x.full) < 0) ? x.t + "（" + x.full + "）" : x.t;
         }).join("\n");
@@ -1898,8 +1850,6 @@
         const M = MODES[activeMode];
         const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), totalMs(M))) : frozenTimer;
 
-        // ---- r1：运行期只刷计时，用户名/等级/积分都不重算(不读 GM，不重建 DOM) ----
-        // 没登录时 r1 直接标红提示，和 r4 的 ·未登录 呼应
         const nameHtml = me.username ? esc(me.username) : '<span style="color:#ff8a8a;">未登录</span>';
         if (running) {
             let t = document.getElementById("ldh_timer");
@@ -1911,46 +1861,41 @@
         } else {
             r1.innerHTML = nameHtml + tlBadge() + ldcSpan() + arSpan() +
                 '<span id="ldh_timer" style="float:right;color:#8fe0b0;margin-left:8px;">' + timer + "</span>";
-            /* 1.0.7：给 autorun.py 用的隐藏标记。面板整段不显示之后，
-             * 靠"r1 里没有 LDC 字样"推断无权限会把【渲染还没完成】的正常环境误判掉，
-             * 白跳过 WAIT_SIGNIN 那 60 秒签到等待。所以给一个明确属性，
-             * 有=确定无权限，没有=一律按正常环境处理。
-             * 只在非运行期写：刷帖期间 OAuth 全停，锁状态不可能变化。 */
+
             if (getNoOauth(me.username)) r1.setAttribute("data-nooauth", "1");
             else r1.removeAttribute("data-nooauth");
-            // r1 每次都由 innerHTML 重建，旧节点连同监听一起丢弃，这里必须重新绑定
+
             const bindLdc = document.getElementById("ldh_ldc");
             if (bindLdc) bindLdc.addEventListener("click", function () { refreshCredit(true); });
             const bindAr = document.getElementById("ldh_arbal");
             if (bindAr) bindAr.addEventListener("click", function () {
-                /* 待刷新 = 今天已经签到成功、只差余额。这时点一下不该重新走一遍
-                 * 完整 OAuth（会白白退出再登录），走 force=false 让它只补查余额。 */
+
                 runArCheckin(arState !== "pending");
             });
         }
 
-        // ---- r2/r3：运行期完全冻结（rowsForPanel 会读 GM 存储，每秒读一次太贵）----
         if (!running) {
             const rows = rowsForPanel();
             document.getElementById("ldh_r2").innerHTML = rows[0];
             document.getElementById("ldh_r3").innerHTML = rows[1];
         }
 
-        // ---- r4 ----
         const r4 = document.getElementById("ldh_r4");
+        r4.title = endNote || "";
+        const notice = document.getElementById("ldh_notice");
+        if (notice) { notice.textContent = endNote; notice.hidden = !endNote; }
         if (running || finishedOnce) {
-            // 只有"启动失败"才显示原因；运行中的异常一律不显示
+
             const showNote = !running && endNote && START_FAIL.indexOf(endNote) >= 0;
             const note = showNote ? ' <span style="color:#ff8a8a;">·' + esc(endNote) + "</span>" : "";
             r4.innerHTML = progressText() + note;
         } else if (banMsg) {
             r4.innerHTML = '<span style="color:#ff8a8a;">' + esc(banMsg) + "</span>";
         } else {
-            // 平时完全空白，只在真出错时才显示（Agent 余额在 R1，不在这里重复）
+
             r4.innerHTML = errorLine();
         }
 
-        // ---- 标题栏按钮：运行期不更新（会读 GM 存储）----
         if (running) return;
 
         const sy = document.getElementById("ldh_sync");
@@ -1965,8 +1910,7 @@
                 sy.style.color = (failed && !hasData) ? "#ff8a8a" : "#8fe0b0";
             }
         }
-        // 封禁时 Any 按钮变红。无 OAuth 权限时按钮外观保持不变（按需求）——
-        // 但 anyrouter 分支里仍有守卫，不会真去跑那条注定被拒的授权流程。
+
         const nb = document.getElementById("ldh_any");
         if (nb) {
             const ban = getAnyBan(me.username);
@@ -1997,7 +1941,7 @@
         p.style.top = "auto";
         p.style.bottom = PANEL_DEF.bottom;
     }
-    // H2：删除 scale(0.9)，右移量 = 2 × 面板宽
+
     function applyMin() {
         const body = document.getElementById("ldh_body"), ic = document.getElementById("ldh_min"), p = document.getElementById("ldh_panel");
         const collapsed = manualMin || composerMin;
@@ -2056,8 +2000,7 @@
         const root = document.querySelector("#reply-control");
         return !!root && root.classList.contains("open") && (root.classList.contains("composer-action-create-topic") || root.classList.contains("composer-action-reply"));
     }
-    /* 发帖框观察器：监听整个 documentElement 的 class 变化，
-     * Discourse 页面 class 抖动很频繁，刷帖时这个观察器会持续触发回调 —— 所以运行期要停掉。 */
+
     let composerMo = null, composerTimer = null;
     function watchComposer() {
         if (composerMo) return;
@@ -2066,7 +2009,7 @@
             if (composerTimer) return;
             composerTimer = setTimeout(function () { composerTimer = null; syncC(); }, 150);
         });
-        try { composerMo.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ["class"] }); } catch (_) {}
+        try { composerMo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] }); } catch (_) {}
         syncC();
     }
     function stopWatchComposer() {
@@ -2074,12 +2017,6 @@
         if (composerTimer) { clearTimeout(composerTimer); composerTimer = null; }
     }
 
-    /* ---- 运行期冻结 ----
-     * 点下刷帖按钮后，页面上只该跑刷帖本身。这里把所有"闲时工作"停掉：
-     *   · 发帖框观察器（运行期你不会去发帖）
-     *   · Credit 积分刷新、AR 签到、别处登录的余额回写
-     *   · 面板收起状态复位（composerMin 归位，否则面板会保持躲避位置）
-     * 收工后 resumeIdleWork() 原样恢复。 */
     let idleSuspended = false;
     function suspendIdleWork() {
         idleSuspended = true;
@@ -2091,36 +2028,16 @@
         watchComposer();
     }
 
-    /* ============================================================
-     * 一键获取邀请链接（1.0.6 新增，合并自独立版 3.0.0）
-     * 流程：实时读当前用户 → 查未使用的待处理邀请 → 有就直接复制
-     *       没有就【静默创建】（不弹确认框）→ 复制。
-     *
-     * 权限判断走【软判断】，故意不看 can_invite_to_forum 字段：
-     * 那个字段一旦缺失或被站点改名，有权限的号也会被脚本自己误杀、功能直接失效。
-     * 改成让服务器说话 —— 只读的 invited.json 对没权限的号会回 403/404，
-     * 结论一样准，但字段变了也不影响，而且没权限的号照样不会发出 POST 写请求。
-     *
-     * 结果只有三类：成功 / 失败（含无权限、冷却中、超时） / 未登录，
-     * 全部走底部居中的 toast，不占用面板 r4 那一行。
-     * ============================================================ */
     const INVITE = {
         TIMEOUT_MS: 20000,
         URL_RE: /^https:\/\/linux\.do\/invites\/[A-Za-z0-9_-]+(?:[/?#].*)?$/i,
         NOT_LOGIN: "尚未登录 Linux.do，请登录后再试。",
         NO_PERM: "无邀请权限，当前账号不能获取邀请链接。"
     };
-    // 1.0.7：toast 不再是邀请功能专属，retryOauth 也用它报恢复结果，所以提到外面
+
     const LDH_TOAST_ID = "ldh_toast";
     let inviteBusy = false, ldhToastTimer = null;
 
-    /* toast：底部居中，z-index 盖在面板(999999)之上。
-     * 全内联样式、不用 GM_addStyle —— 少要一个 @grant。
-     * 代价是写不了 :hover / :disabled 伪类，所以按钮的禁用态由 JS 直接设
-     * opacity/cursor（和 markButtons() 里置灰三个模式按钮的做法一致）。
-     * sticky=true 的那条永不自动消失：拿到链接但复制失败时用，
-     * 链接绝不能因为 15 秒到点就消失 —— 那可能是刚扣掉额度换来的。
-     * 三类 toast 都能点一下提前关掉。 */
     function ldhToast(msg, type, sticky) {
         let box = document.getElementById(LDH_TOAST_ID);
         if (!box) {
@@ -2146,19 +2063,9 @@
         if (box) box.hidden = true;
     }
 
-    // 邀请接口全是 linux.do 同源，用原生 fetch 就够，不需要 GM_xmlhttpRequest
     function inviteFetch(url, options) {
-        const ctrl = new AbortController();
-        const timer = setTimeout(function () { ctrl.abort(); }, INVITE.TIMEOUT_MS);
-        const opts = Object.assign({ credentials: "same-origin", cache: "no-store" }, options || {});
-        opts.signal = ctrl.signal;
-        return fetch(url, opts).then(function (r) {
-            clearTimeout(timer); return r;
-        }, function (e) {
-            clearTimeout(timer);
-            if (e && e.name === "AbortError") throw new Error("请求超时，请检查网络后重试。");
-            throw new Error("网络错误，请检查网络后重试。");
-        });
+        return fetchTimed(url, Object.assign({ credentials: "same-origin", cache: "no-store" }, options || {}))
+            .catch(function (e) { throw new Error(/超时/.test(e.message || "") ? "请求超时，请检查网络后重试。" : "网络错误，请检查网络后重试。"); });
     }
     async function inviteRead(resp) {
         let text = "";
@@ -2167,10 +2074,7 @@
         try { data = JSON.parse(text); } catch (_) {}
         return { data: data, text: text };
     }
-    /* 服务器给了文字就原样透传 —— 冷却提示"请等待 71 小时后再试"这类最关键的信息
-     * 全在这里面，一旦被压成一句"失败"，你就只能瞎猜什么时候能再试。
-     * 服务器没给文字才落到通用文案，且只归成"未登录 / 无权限 / HTTP 错误"三种，
-     * 不再按等级细分（不到等级就是没有邀请入口，说清"没权限"就够了）。 */
+
     function inviteErrMsg(data, text, status) {
         const cands = (Array.isArray(data && data.errors) ? data.errors : [])
             .concat([data && data.error, data && data.message, data && data.failed, data && data.exception]);
@@ -2189,11 +2093,6 @@
         return INVITE.URL_RE.test(s) ? s : "";
     }
 
-    /* 每次点击都实时读一遍当前用户，故意不吃 #data-preloaded 那份页面快照：
-     * Discourse 是 SPA，标签页可能开了几个小时，中途在别的标签换过号，
-     * 快照里还是旧用户名 —— 拿旧名去查 invited.json 会 403，报出来是"无权限"，
-     * 明明是用户名错了，很误导。
-     * 另外未登录时这个接口回 404，绝不能落到"无权限"文案上，所以单独判掉。 */
     async function inviteCurrentUser() {
         const r = await inviteFetch("/session/current.json", {
             headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
@@ -2207,17 +2106,17 @@
         return { username: name, staff: !!(u && u.staff) };
     }
 
-    /* 只认"还没被用掉"的邀请：redemption_count < max_redemptions_allowed。
-     * 完整链接在 invite.link 字段里 —— 页面上视觉只显示 NoZm… 这种缩写，
-     * 所以绝不能去读页面文字，必须读 JSON 字段。 */
     function invitePickPending(list) {
         if (!Array.isArray(list)) return "";
         for (let i = 0; i < list.length; i++) {
             const it = list[i], link = inviteUrlOf(it && it.link);
             if (!link) continue;
-            const used = Number((it && it.redemption_count) || 0);
-            const max = Number((it && it.max_redemptions_allowed) || 1);
-            if (used < max) return link;
+            if (it.expired || it.revoked || it.invalidated_at || it.revoked_at) continue;
+            const expires = it.expires_at ? Date.parse(it.expires_at) : null;
+            if (expires !== null && (!Number.isFinite(expires) || expires <= Date.now())) continue;
+            const used = Number(it.redemption_count == null ? 0 : it.redemption_count);
+            const max = Number(it.max_redemptions_allowed == null ? 1 : it.max_redemptions_allowed);
+            if (Number.isFinite(used) && Number.isFinite(max) && used >= 0 && used < max) return link;
         }
         return "";
     }
@@ -2226,7 +2125,7 @@
         const r = await inviteFetch(url, {
             headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
         });
-        // 软判断的落点：没权限的号连这个只读接口都读不了，服务器回 403/404
+
         if (r.status === 403 || r.status === 404) throw new Error(INVITE.NO_PERM);
         const rd = await inviteRead(r);
         if (!r.ok) throw new Error(inviteErrMsg(rd.data, rd.text, r.status));
@@ -2234,10 +2133,7 @@
     }
 
     function invitePad2(n) { return String(n).padStart(2, "0"); }
-    /* Linux.do 前端用的格式：YYYY-MM-DD HH:mm±HH:MM
-     * 注意这里【带偏移量】发过去，服务器能还原成正确的绝对时间，
-     * 所以指纹浏览器把时区设成美西也不会算错到期时间 ——
-     * 和 todayStr() 那边的时区坑不是一回事，这里不需要写死东八区。 */
+
     function inviteExpiresAt(days) {
         const d = new Date(Date.now() + days * 24 * 3600 * 1000);
         const off = -d.getTimezoneOffset(), sign = off >= 0 ? "+" : "-", abs = Math.abs(off);
@@ -2245,19 +2141,17 @@
             invitePad2(d.getHours()) + ":" + invitePad2(d.getMinutes()) +
             sign + invitePad2(Math.floor(abs / 60)) + ":" + invitePad2(abs % 60);
     }
-    // 站点设置没有轻量 JSON 接口，只能读页面快照；读不到就用 1 天 / 1 次
-    // （实测站点配置正好是 invite_expiry_days=1、invite_link_max_redemptions_limit_users=1）
+
     function inviteSiteSettings() {
         try {
             const el = document.querySelector("#data-preloaded");
-            const pre = el ? JSON.parse(el.textContent || "") : null;
+            const pre = el ? JSON.parse(el.getAttribute("data-preloaded") || el.textContent || "") : null;
             const s = pre && pre.siteSettings;
             return (typeof s === "string" ? JSON.parse(s) : s) || {};
         } catch (_) { return {}; }
     }
     async function inviteCreate(user) {
-        // 复用 helper 现成的 getCsrf()：meta 读不到会自动去 /session/csrf.json 兜底，
-        // 比独立版"只读 meta，读不到就让你刷新页面"结实。
+
         const token = await getCsrf();
         if (!token) throw new Error("没有读取到 CSRF Token，请刷新页面后重试。");
 
@@ -2283,18 +2177,17 @@
             body: body.toString()
         });
         const rd = await inviteRead(r);
-        // 冷却中就是在这一步被拒的，服务器原文形如"请等待 71 小时后再试"，必须原样透出去
+
         if (!r.ok) throw new Error(inviteErrMsg(rd.data, rd.text, r.status));
 
         const direct = inviteUrlOf(rd.data && rd.data.link);
         if (direct) return direct;
-        // 某些版本的响应结构不同，创建成功后再读一次待处理列表兜底
+
         const back = invitePickPending(await invitePending(user.username));
         if (back) return back;
         throw new Error("邀请已提交，但响应里没有完整邀请链接。");
     }
 
-    // 三级兜底：GM_setClipboard → navigator.clipboard → execCommand
     async function inviteCopy(text) {
         if (typeof GM_setClipboard === "function") {
             try { GM_setClipboard(text, "text"); return; } catch (_) {}
@@ -2313,12 +2206,6 @@
         if (!ok) throw new Error("浏览器拒绝写入剪贴板");
     }
 
-    /* 「邀请」按钮的点击入口。
-     * 不受 idleSuspended 约束 —— 这是手动操作，和手动点 LDC / Agent 文字一个道理，
-     * 刷帖运行期间也随时能用。
-     * 按钮文字固定"邀请"不变（标题栏放不下"正在生成…"，会把布局撑变形），
-     * 所以进度全走 toast：点下去立刻先弹一条灰字，否则慢请求最长 20 秒里
-     * 页面上只有按钮变灰，容易以为点了没反应。 */
     async function runInvite(btn) {
         if (inviteBusy) return;
         inviteBusy = true;
@@ -2329,16 +2216,12 @@
             let link = invitePickPending(await invitePending(user.username));
             let created = false;
             if (!link) {
-                /* 没有未使用的待处理邀请，常见原因是旧链接已被用掉。
-                 * 这一步会真的消耗一次额度（之后约 72 小时才能再创建），
-                 * 创建是静默的、不弹确认框，所以这条灰字是仅剩的"即将扣额度"预警。 */
+
                 ldhToast("没有找到未使用的待处理邀请，正在检查生成资格和冷却时间…", "info");
                 link = await inviteCreate(user);
                 created = true;
             }
-            /* 链接已经到手（created 时刚扣掉一次额度），
-             * 剪贴板写失败也绝不能把它丢掉 —— 独立版在这里会只报"浏览器拒绝写入剪贴板"，
-             * 链接直接消失，那次额度就白花了。 */
+
             try {
                 await inviteCopy(link);
                 const head = created ? "已生成新的邀请链接" : "已提取未使用的待处理邀请";
@@ -2357,22 +2240,57 @@
         }
     }
 
+    let forumUserJob = null;
+    function refreshForumUser(force) {
+        if (forumUserJob) return force ? forumUserJob.then(function () { return refreshForumUser(); }) : forumUserJob;
+        forumUserJob = getUser().then(function (u) {
+            const oldUser = currentLdUser(), user = normUser(u.username);
+            if (normUser(me.username) !== user) {
+                summary = null; summaryState = "idle"; syncState = "idle";
+                _tl3Cache = { key: "", at: 0, v: null };
+                ldc = { state: "idle", value: "", msg: "" };
+                arState = "idle"; arText = ""; arBal = "";
+            }
+            me = u;
+            if (!user) { render(); return; }
+            if (oldUser && oldUser !== user) {
+                [AR.DAYKEY, AR.REWARDKEY, AR.NOTEKEY, AR.UIDKEY, AR.BALKEY, AR.BALDAY, AR.SIDEKEY, AR.FLOW, AR.AUTOKEY].forEach(gmDel);
+            }
+            gmSet(LD_USER_KEY, user);
+            const saved = loadArNote();
+            if (saved && arState !== "running") { arState = saved.state; arText = saved.text; arBal = saved.bal; }
+            render();
+            if (isLowTL()) loadSummary(false);
+            else {
+                const cached = readTL3();
+                if (!cached || Date.now() - Number(cached.at || 0) > SYNC_THROTTLE_MS) sync();
+            }
+            setTimeout(function () {
+                if (normUser(me.username) !== user || isLoginView()) return;
+                refreshCredit(false).catch(function () {}).then(function () {
+                    if (normUser(me.username) === user && !isLoginView()) return runArCheckin(false);
+                }).catch(function () {});
+            }, 1200);
+        }).finally(function () { forumUserJob = null; });
+        return forumUserJob;
+    }
+
     function createUI() {
         if (document.getElementById("ldh_panel")) return;
         const p = document.createElement("div"); p.id = "ldh_panel";
-        // H2：265px 实宽、无 scale、内边距 8px、字号按旧值 ×0.9
+
         p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;" +
             "padding:2px " + UI.PAD_X + "px 9px " + UI.PAD_X + "px;border-radius:9px;width:" + UI.WIDTH + "px;box-sizing:border-box;" +
+            "max-width:calc(100vw - 32px);" +
             "font-size:10px;line-height:14px;box-shadow:0 6px 16px rgba(0,0,0,0.4);overflow:visible;";
-        const rowCss = "white-space:nowrap;overflow:hidden;min-height:14px;";
+        const rowCss = "white-space:normal;overflow-wrap:anywhere;min-height:14px;";
         const btnCss = "flex:1;padding:8px 2px;border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;white-space:nowrap;";
-        const smallBtnCss = "padding:3px 5px;border:none;border-radius:4px;cursor:pointer;font-size:9px;margin-left:4px;";
+        const smallBtnCss = "padding:3px 5px;border:none;border-radius:4px;cursor:pointer;font-size:9px;margin-left:4px;white-space:nowrap;flex-shrink:0;";
         p.innerHTML =
-            '<div id="ldh_title" style="display:flex;justify-content:space-between;align-items:center;cursor:move;min-height:20px;padding:4px 0 0 0;line-height:1.6;overflow:visible;">' +
-            '<span style="font-weight:bold;font-size:10px;">⚡ LINUX DO 助手</span>' +
-            '<span style="display:flex;align-items:center;">' +
-            // 1.0.6 新增：Any 左侧的「邀请」按钮。用 <button> 元素很关键 ——
-            // enableDrag 会跳过 button/a，点它不会误拖整个面板
+            '<div id="ldh_title" style="display:flex;flex-wrap:wrap;gap:2px 4px;justify-content:space-between;align-items:center;cursor:move;min-height:20px;padding:4px 0 0 0;line-height:1.6;overflow:visible;">' +
+            '<span style="font-weight:bold;font-size:10px;white-space:nowrap;flex-shrink:0;">⚡ LINUX DO 助手</span>' +
+            '<span style="display:flex;align-items:center;white-space:nowrap;flex-shrink:0;">' +
+
             '<button id="ldh_invite" style="' + smallBtnCss + 'background:#1677ff;color:#fff;" title="查询未使用的待处理邀请；没有就直接创建，并复制完整链接">邀请</button>' +
             '<button id="ldh_any" style="' + smallBtnCss + 'background:#666;color:#fff;" title="AnyRouter">Any</button>' +
             '<span id="ldh_sync" style="cursor:pointer;font-size:9px;color:#8fe0b0;margin-left:6px;" title="同步等级进度">⟳同步</span>' +
@@ -2385,28 +2303,29 @@
             '<button id="ldh_fast"  style="' + btnCss + 'background:' + MODES.fast.color + ';">快速升级</button>' +
             '<button id="ldh_idle"  style="' + btnCss + 'background:' + MODES.idle.color + ';">日常挂机</button>' +
             '</div>' +
-            // R1 有四段内容，10px 放不下(275px>249px)，9px 才够(248px)
+
             '<div id="ldh_r1" style="' + rowCss + 'font-size:9px;"></div>' +
             '<div id="ldh_r2" style="' + rowCss + 'font-size:9px;"></div>' +
             '<div id="ldh_r3" style="' + rowCss + 'font-size:9px;"></div>' +
             '<div id="ldh_r4" style="' + rowCss + 'margin-top:2px;font-size:9px;"></div>' +
+            '<div id="ldh_notice" role="status" hidden style="font-size:10px;line-height:1.4;color:#ffb4ab;overflow-wrap:anywhere;margin-top:3px;"></div>' +
             '</div>';
         document.body.appendChild(p);
         MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
         document.getElementById("ldh_sync").addEventListener("click", function () {
-            // 手动恢复入口只在这里 —— 自动同步走的是 sync()，不碰标志
+
             if (getNoOauth(me.username)) retryOauth();
             sync();
         });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
         document.getElementById("ldh_invite").addEventListener("click", function () { runInvite(this); });
         document.getElementById("ldh_any").addEventListener("click", function () {
-            // 1.0.8：无 OAuth 权限时点 Any 也是白开标签 —— 授权页必然拒绝
+
             if (getNoOauth(me.username)) {
                 ldhToast(NO_OAUTH_MSG + "，AnyRouter 登录必然被拒。点 ⟳ 可强制重试一次。", "error");
                 return;
             }
-            // Q7：手动点击 = 清除封禁标记并重试
+
             if (getAnyBan(me.username)) clearAnyBan(me.username);
             anyState = "running"; render(); anyOpenTab();
             setTimeout(function () { anyState = "idle"; render(); }, 3000);
@@ -2418,67 +2337,473 @@
             if (rzTimer) clearTimeout(rzTimer);
             rzTimer = setTimeout(function () { rzTimer = null; resetPos(p); applyMin(); }, 200);
         });
-        manualMin = sessionStorage.getItem("ldh_min") === "1"; applyMin();
+        try { manualMin = sessionStorage.getItem("ldh_min") === "1"; } catch (_) {}
+        applyMin();
         watchComposer();
-
-        const saved = loadArNote();
-        if (saved) { arState = saved.state; arText = saved.text; arBal = saved.bal; }
 
         render();
         window.addEventListener("beforeunload", function (e) { if (running) { e.preventDefault(); e.returnValue = ""; return ""; } });
+        refreshForumUser();
 
-        getUser().then(function (u) {
-            me = u;
-            if (me.username) gmSet(LD_USER_KEY, normUser(me.username));
-            render();
-            if (!me.username) return;
-            // TL0/1 在 connect 上拿不到明细，改拉 summary.json；两者都做 10 分钟节流
-            if (isLowTL()) {
-                if (!sessionStorage.getItem("ldh_autosum")) {
-                    sessionStorage.setItem("ldh_autosum", "1");
-                    const lastSum = Number(localStorage.getItem("ldh_autosum_ts") || 0);
-                    if (Date.now() - lastSum > SYNC_THROTTLE_MS) { localStorage.setItem("ldh_autosum_ts", String(Date.now())); loadSummary(); }
-                    else { loadSummary(); }   // 有节流也要显示一次：读的是本地已有数据，不发请求
-                }
-            } else if (!sessionStorage.getItem("ldh_autosync")) {
-                sessionStorage.setItem("ldh_autosync", "1");
-                const lastTs = Number(localStorage.getItem("ldh_autosync_ts") || 0);
-                if (Date.now() - lastTs > SYNC_THROTTLE_MS) { localStorage.setItem("ldh_autosync_ts", String(Date.now())); sync(); }
-            }
-            /* Credit 与 AgentRouter 串行：两个都可能开前台标签抢焦点，
-             * 必须等前一个彻底结束（成功/失败/超时）再启动后一个，否则会连弹两个标签。 */
-            setTimeout(function () {
-                refreshCredit(false).catch(function () {}).then(function () { runArCheckin(false); });
-            }, 1200);
-        });
-
-        // 切回标签页时读一次别处登录回写的余额
         window.addEventListener("focus", pullSideBalance);
         document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") pullSideBalance(); });
     }
 
-    function initLoginPage() {
-        function waitFor(sel, cb) { let el = document.querySelector(sel); if (el) return cb(el); let waited = 0; const iv = setInterval(function () { el = document.querySelector(sel); if (el) { clearInterval(iv); cb(el); } else if ((waited += 200) >= 12000) clearInterval(iv); }, 200); }
-        waitFor("h1.login-title", function (titleEl) {
-            if (document.getElementById("ldh_login_btn")) return;
-            const btn = document.createElement("button");
-            btn.id = "ldh_login_btn"; btn.textContent = "登陆";
-            btn.style.cssText = "margin:8px 0;padding:6px 14px;cursor:pointer;font-size:14px;white-space:nowrap;border-radius:6px;border:1px solid rgba(0,0,0,0.2);background:#2f6f3e;color:#fff;";
-            titleEl.insertAdjacentElement("afterend", btn);
-            btn.addEventListener("click", async function () {
-                let text = "";
-                try { text = await navigator.clipboard.readText(); } catch (e) { alert("读取剪贴板失败，请允许剪贴板权限后重试"); return; }
-                const parts = String(text || "").trim().split(/\s+/);
-                if (parts.length < 2) { alert("剪贴板格式应为：账号 密码（用空格分隔）"); return; }
-                const u = document.querySelector("#login-account-name"), pw = document.querySelector("#login-account-password");
-                if (!u || !pw) { alert("没找到账号/密码输入框"); return; }
-                u.focus(); u.value = parts[0]; u.dispatchEvent(new Event("input", { bubbles: true }));
-                pw.focus(); pw.value = parts[1]; pw.dispatchEvent(new Event("input", { bubbles: true }));
-                const lb = document.querySelector("#login-button");
-                if (lb) setTimeout(function () { lb.click(); }, 300); else alert("没找到登录按钮");
-            });
+    // 登录助手：保持文件实际行号，空行不重排。
+    function loginLineNumber(value) {
+        const text = String(value == null ? "" : value).trim();
+        const n = Number(text);
+        if (!/^\d+$/.test(text) || !Number.isSafeInteger(n) || n < 1) {
+            throw new Error("请输入大于 0 的整数行号，例如 1。");
+        }
+        return n;
+    }
+
+    function loginCredentials(line) {
+        const value = String(line || "").replace(/^\uFEFF/, "").trim();
+
+        const match = value.match(/^([^\s+]+)(?:[ \t]+([^\r\n]+)|\+([^\r\n]+))$/);
+        if (!match || /[\r\n\u0000]/.test(value) || /^(?:#|\/\/)/.test(value)) {
+            throw new Error("格式应为：用户名 密码，或用户名+密码；一次只能填写一行。");
+        }
+        const username = stripAt(match[1]), password = (match[2] || match[3] || "").trim();
+        if (!/^[A-Za-z0-9_.@-]+$/.test(username) || !password) throw new Error("账号或密码格式不正确。");
+        return { username: username, password: password };
+    }
+
+    function accountFileLines(text) {
+        text = String(text || "").replace(/^\uFEFF/, "");
+        if (!text.trim()) throw new Error("账号文件为空。");
+        if (/^\s*[<{\[]/.test(text)) throw new Error("获取到的不是账号文本，请检查私库文件内容。");
+        if (text.length > 2 * 1024 * 1024) throw new Error("账号文件过大，请使用小于 2 MB 的文本文件。");
+        const lines = text.split(/\r\n|\n|\r/);
+
+        if (lines[lines.length - 1] === "") lines.pop();
+        return lines;
+    }
+
+    function loginAccountAt(text, number) {
+        number = loginLineNumber(number);
+        const lines = accountFileLines(text);
+        if (number > lines.length) throw new Error("行号超出范围，文件共有 " + lines.length + " 行。");
+        if (!lines[number - 1].trim()) throw new Error("第 " + number + " 行为空，请换一个行号。");
+        try { return loginCredentials(lines[number - 1]); }
+        catch (_) { throw new Error("第 " + number + " 行格式不正确，应为：用户名 密码，或用户名+密码。"); }
+    }
+
+    function loginReadAccounts(signal) {
+        return new Promise(function (resolve, reject) {
+            if (typeof GM_xmlhttpRequest !== "function") {
+                reject(new Error("缺少跨域请求权限，请在脚本管理器中更新完整脚本。")); return;
+            }
+            const token = String(GITHUB_TOKEN || "").trim();
+            if (!token || /\s/.test(token)) { reject(new Error("请在脚本顶部填写有效的 GitHub 令牌。")); return; }
+            let handle = null, done = false;
+            function settle(error, value) {
+                if (done) return;
+                done = true;
+                if (signal) signal.removeEventListener("abort", cancel);
+                if (error) reject(error); else resolve(value);
+            }
+            function cancel() {
+                if (done) return;
+                settle(new DOMException("请求已取消", "AbortError"));
+                try { if (handle) handle.abort(); } catch (_) {}
+            }
+            if (signal && signal.aborted) { cancel(); return; }
+            if (signal) signal.addEventListener("abort", cancel, { once: true });
+            try { handle = GM_xmlhttpRequest({
+                method: "GET",
+                url: ACCOUNTS_API + "&_ldh=" + Date.now(),
+                headers: { "Accept": "application/vnd.github.raw+json", "Authorization": "Bearer " + token, "X-GitHub-Api-Version": "2022-11-28" },
+                anonymous: true,
+                redirect: "error",
+                timeout: 20000,
+                onload: function (r) {
+                    if (done) return;
+                    let error = "";
+                    if (r.status === 401) error = "GitHub 令牌无效或已过期，请更新脚本顶部的令牌。";
+                    else if (r.status === 429 || (r.status === 403 && /^x-ratelimit-remaining:\s*0\s*$/im.test(r.responseHeaders || ""))) error = "GitHub 请求频率受限，请稍后重试。";
+                    else if (r.status === 403) error = "令牌没有读取权限，请授予 Personal-Backup 仓库的 Contents 读取权限。";
+                    else if (r.status === 404) error = "找不到私库文件，请检查仓库、main 分支、文件路径及令牌授权范围。";
+                    if (r.status < 200 || r.status >= 300) {
+                        settle(new Error(error || "获取账号文件失败（HTTP " + r.status + "）。")); return;
+                    }
+                    try {
+                        const final = new URL(r.finalUrl || ACCOUNTS_API), expected = new URL(ACCOUNTS_API);
+                        if (final.origin !== expected.origin || final.pathname !== expected.pathname) throw new Error("账号请求发生了意外跳转，请检查网络。");
+                        if (/^content-type:\s*text\/html\b/im.test(r.responseHeaders || "")) throw new Error("获取到的是网页，请稍后重试。");
+                        const text = String(r.responseText || "");
+                        accountFileLines(text);
+                        settle(null, text);
+                    } catch (e) {
+                        settle(new Error(e.message || "账号文件读取失败。"));
+                    }
+                },
+                onerror: function () { settle(new Error("读取私库失败，请检查网络及 api.github.com 跨域权限。")); },
+                ontimeout: function () { settle(new Error("获取账号文件超时，请重试。")); },
+                onabort: cancel
+            }); } catch (_) { settle(new Error("无法发起私库请求，请检查脚本管理器的跨域权限。")); }
         });
     }
-    function boot() { if (/^\/login/.test(location.pathname)) initLoginPage(); else createUI(); }
+
+    function hcaptchaFrame() {
+        const params = new URLSearchParams(location.hash.slice(1));
+        if (window.parent === window || params.get("host") !== "linux.do" || params.get("frame") !== "checkbox") return;
+        let activeId = "", handledId = "", automatic = false;
+        function report(state) {
+            try { window.parent.postMessage({ type: HC.message, id: activeId, state: state }, "https://linux.do"); } catch (_) {}
+        }
+        function handled(state) { handledId = activeId; report(state); }
+        document.addEventListener("click", function (e) {
+            if (!activeId || activeId === handledId || automatic || !(e.target instanceof Element)) return;
+            if (e.target.closest("#anchor") && !e.target.closest('a,[class*="logo"],[class*="link"]')) handled("manual");
+        }, true);
+        window.addEventListener("message", function (e) {
+            const data = e.data;
+            if (e.source !== window.parent || e.origin !== "https://linux.do" || !data || data.type !== HC.message ||
+                typeof data.id !== "string" || !data.id || data.id.length > 100) return;
+            if (data.action === "cancel") { if (activeId === data.id) activeId = ""; return; }
+            if (data.action !== "click") return;
+            activeId = data.id;
+            if (handledId === activeId) { report("handled"); return; }
+            const box = document.querySelector('#checkbox[role="checkbox"]');
+            if (!box) return;
+            if (box.getAttribute("aria-checked") === "true") { handled("checked"); return; }
+            if (box.tabIndex < 0 && !box.hasAttribute("disabled")) { handled("busy"); return; }
+            const style = window.getComputedStyle(box);
+            if (document.visibilityState === "hidden" || !box.getClientRects().length || box.tabIndex !== 0 ||
+                box.getAttribute("aria-checked") !== "false" || box.matches('[disabled],[aria-disabled="true"]') ||
+                style.visibility !== "visible" || style.opacity === "0") return;
+            automatic = true;
+            try { box.click(); handled("clicked"); } finally { automatic = false; }
+        });
+    }
+
+    function loginFields() {
+        const username = document.querySelector("#login-account-name");
+        const password = document.querySelector("#login-account-password");
+        return username && password ? { username: username, password: password } : null;
+    }
+
+    function isLoginView() {
+        if (/^\/login(?:\/|$)/.test(location.pathname)) return true;
+
+        const fields = loginFields();
+        return !!(fields && fields.username.getClientRects().length && fields.password.getClientRects().length);
+    }
+
+    function waitForLoginFields(isCurrent) {
+        return new Promise(function (resolve, reject) {
+            const started = Date.now();
+            function check() {
+                if (!isCurrent()) { resolve(null); return; }
+                const fields = loginFields();
+                if (fields && !fields.username.matches(":disabled") && !fields.password.matches(":disabled") &&
+                    !fields.username.readOnly && !fields.password.readOnly) { resolve(fields); return; }
+                if (Date.now() - started >= 10000) {
+                    reject(new Error("没有找到可填写的账号/密码输入框，请等登录表单加载后重试。")); return;
+                }
+                setTimeout(check, 100);
+            }
+            check();
+        });
+    }
+
+    function fillLoginFields(fields, account) {
+
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        [[fields.username, account.username], [fields.password, account.password]].forEach(function (pair) {
+            setter.call(pair[0], pair[1]);
+            pair[0].dispatchEvent(new Event("input", { bubbles: true }));
+            pair[0].dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        fields.password.focus({ preventScroll: true });
+    }
+
+    async function submitLogin(fields, account, isCurrent) {
+        const started = Date.now();
+        // 留时间让页面接收 input/change，随后等待登录按钮可用。
+        await sleep(150);
+        while (isCurrent()) {
+            if (!fields.username.isConnected || !fields.password.isConnected ||
+                fields.username.value !== account.username || fields.password.value !== account.password) {
+                throw new Error("登录表单已变化，已取消自动提交，请确认账号后重试。");
+            }
+            const button = document.querySelector("#login-button");
+            if (button && button.getClientRects().length &&
+                !button.matches(':disabled,[aria-disabled="true"],[aria-busy="true"]')) {
+                button.click();
+                return "submitted";
+            }
+            if (Date.now() - started >= 10000) return "blocked";
+            await sleep(100);
+        }
+        return "cancelled";
+    }
+
+    function initLoginPage() {
+        let panel = null, root = null, busy = false, generation = 0, active = false, request = null;
+        let mainCreated = false, hiddenMain = null, mainDisplay = "", scheduled = null;
+        let captchaJob = null, captchaLoginId = 0, captchaNote = "";
+        let focusCleanup = null;
+
+        function focusLoginLine() {
+            if (focusCleanup) focusCleanup();
+            if (!/^\/login\/?$/.test(location.pathname)) return;
+            const field = root.getElementById("ldh_login_line");
+            let pending = null, restores = 0;
+            function release() {
+                clearTimeout(pending); clearTimeout(expiry);
+                document.removeEventListener("focusin", regain, true);
+                document.removeEventListener("pointerdown", choose, true);
+                document.removeEventListener("keydown", choose, true);
+                if (focusCleanup === release) focusCleanup = null;
+            }
+            function focus() {
+                pending = null;
+                if (!panel.isConnected || busy || !isLoginView() || field.disabled || root.getElementById("ldh_login_body").hidden) { release(); return; }
+                field.focus({ preventScroll: true });
+            }
+            function regain(e) {
+                if (e.target.id !== "login-account-name" || pending !== null) return;
+                if (++restores > 3) { release(); return; }
+                pending = setTimeout(focus, 0);
+            }
+            function choose(e) {
+                if (!e.composedPath().includes(field) || e.key === "Tab" || e.key === "Escape") release();
+            }
+            const expiry = setTimeout(release, 5000);
+            focusCleanup = release;
+            document.addEventListener("focusin", regain, true);
+            document.addEventListener("pointerdown", choose, true);
+            document.addEventListener("keydown", choose, true);
+            focus();
+        }
+
+        function sendCaptcha(frame, action, id) {
+            try { if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: HC.message, action: action, id: id }, HC.origin); } catch (_) {}
+        }
+        function stopCaptcha() {
+            if (captchaJob) sendCaptcha(captchaJob.frame, "cancel", captchaJob.id);
+            captchaJob = null;
+        }
+        function pollCaptcha() {
+            if (!captchaJob) return;
+            if (!isLoginView() || Date.now() >= captchaJob.until) {
+                const seen = !!captchaJob.frame;
+                stopCaptcha();
+                if (seen && panel.isConnected && isLoginView()) {
+                    captchaNote = "验证码自动点击未确认，请手动勾选「我是真实访客」。";
+                    status(captchaNote);
+                }
+                return;
+            }
+            if (document.visibilityState === "hidden") return;
+            const frame = Array.from(document.querySelectorAll("iframe[src]")).find(function (el) {
+                try {
+                    const url = new URL(el.src), params = new URLSearchParams(url.hash.slice(1));
+                    return url.origin === HC.origin && /\/static\/hcaptcha\.html$/.test(url.pathname) &&
+                        params.get("host") === "linux.do" && params.get("frame") === "checkbox" &&
+                        el.getClientRects().length && window.getComputedStyle(el).visibility === "visible";
+                } catch (_) { return false; }
+            });
+            if (!frame || !frame.contentWindow) return;
+            if (captchaJob.frame && captchaJob.frame !== frame) sendCaptcha(captchaJob.frame, "cancel", captchaJob.id);
+            captchaJob.frame = frame;
+            sendCaptcha(frame, "click", captchaJob.id);
+        }
+        function armCaptcha(id) {
+            if (captchaLoginId === id) return;
+            stopCaptcha(); captchaLoginId = id; captchaNote = "";
+            captchaJob = { id: Date.now().toString(36) + Math.random().toString(36).slice(2), until: Date.now() + 90000, frame: null };
+            setTimeout(pollCaptcha, 0);
+        }
+        window.addEventListener("message", function (e) {
+            const data = e.data;
+            if (!captchaJob || e.origin !== HC.origin || !captchaJob.frame || e.source !== captchaJob.frame.contentWindow ||
+                !data || data.type !== HC.message || data.id !== captchaJob.id ||
+                ["clicked", "manual", "checked", "handled", "busy"].indexOf(data.state) < 0) return;
+            stopCaptcha();
+            captchaNote = data.state === "checked" ? "验证框已勾选，等待网页登录结果…" :
+                data.state === "busy" ? "验证码正在处理，请完成可能出现的图片题并等待网页登录结果。" :
+                "已点击「我是真实访客」。如果出现图片题，请手动完成，随后等待网页登录结果。";
+            if (panel.isConnected && isLoginView()) status(captchaNote);
+        });
+
+        function status(message, error) {
+            const el = root.getElementById("ldh_login_status");
+            el.textContent = message;
+            el.style.color = error ? "#ffb4ab" : "#b7e6c5";
+        }
+        function setBusy(value) {
+            if (value && focusCleanup) focusCleanup();
+            busy = value;
+            ["ldh_login_line", "ldh_login_fetch", "ldh_login_btn"].forEach(function (id) {
+                root.getElementById(id).disabled = value;
+            });
+            root.getElementById("ldh_login_body").setAttribute("aria-busy", String(value));
+        }
+        function isCurrent(id) { return id === generation && panel.isConnected && isLoginView(); }
+
+        async function run(source) {
+            if (busy) return;
+            let number;
+            if (source === "file") {
+                try { number = loginLineNumber(root.getElementById("ldh_login_line").value); }
+                catch (e) { status(e.message, true); return; }
+            }
+            const id = ++generation, initial = loginFields();
+            const original = initial && [initial.username.value, initial.password.value];
+            let submitted = false;
+            stopCaptcha();
+            function onSubmit(e) {
+                if (!isCurrent(id) || !(e.target instanceof Element)) return;
+                const button = e.type === "click" && e.target.closest("#login-button");
+                if ((button && !button.matches(':disabled,[aria-disabled="true"]')) ||
+                    (e.type === "submit" && e.target.contains(document.querySelector("#login-account-name")))) {
+                    submitted = true;
+                    armCaptcha(id);
+                    if (request) request.abort();
+                }
+            }
+            document.addEventListener("click", onSubmit, true);
+            document.addEventListener("submit", onSubmit, true);
+            setBusy(true);
+            status(source === "file" ? "正在获取第 " + number + " 行…" : "正在读取剪贴板…");
+            try {
+                let account;
+                if (source === "file") {
+                    request = new AbortController();
+                    account = loginAccountAt(await loginReadAccounts(request.signal), number);
+                    request = null;
+                } else {
+                    let text;
+                    try { text = await navigator.clipboard.readText(); }
+                    catch (_) { throw new Error("读取剪贴板失败，可改用行号获取，或检查剪贴板权限。"); }
+                    account = loginCredentials(text);
+                }
+                if (!isCurrent(id) || submitted) return;
+                status("正在等待登录表单…");
+                const fields = await waitForLoginFields(function () { return isCurrent(id) && !submitted; });
+                if (!fields || !isCurrent(id) || submitted) return;
+                if (initial && (fields.username !== initial.username || fields.password !== initial.password ||
+                    fields.username.value !== original[0] || fields.password.value !== original[1])) {
+                    throw new Error("等待期间登录表单已变化，已取消填写和提交，请确认账号后重试。");
+                }
+                fillLoginFields(fields, account);
+                armCaptcha(id);
+                status("已填写" + (source === "file" ? "第 " + number + " 行，" : "，") + "正在等待登录按钮…");
+                const result = await submitLogin(fields, account, function () { return isCurrent(id) && !submitted; });
+                if (result === "submitted") submitted = true;
+                if (isCurrent(id) && result === "blocked") status("已填写，但登录按钮暂不可用。请完成页面验证后点击网页的登录按钮。");
+            } catch (e) {
+                if (isCurrent(id) && !submitted) status(e.message || "操作失败，请重试。", true);
+            } finally {
+                document.removeEventListener("click", onSubmit, true);
+                document.removeEventListener("submit", onSubmit, true);
+                if (id === generation) {
+                    request = null; setBusy(false);
+                    if (!submitted) stopCaptcha();
+                    if (submitted && isCurrent(id)) status(captchaNote || "已提交登录，等待验证码出现后自动点击「我是真实访客」；图片题请手动完成。");
+                }
+            }
+        }
+
+        function createPanel() {
+            panel = document.createElement("div");
+            panel.id = "ldh_login_panel";
+
+            panel.style.cssText = "all:initial;position:fixed!important;left:8px!important;bottom:8px!important;" +
+                "z-index:2147483647!important;display:block!important;width:320px!important;" +
+                "max-width:calc(100vw - 16px)!important;margin:0!important;padding:0!important;";
+            root = panel.attachShadow({ mode: "open" });
+            root.innerHTML = '<style>' +
+                ':host{color-scheme:dark}*{box-sizing:border-box}[hidden]{display:none!important}' +
+                'section{font:13px/1.5 system-ui,sans-serif;color:#fff;background:#202923;border:1px solid #51705b;' +
+                'border-radius:10px;box-shadow:0 4px 18px #0005;max-height:calc(100vh - 16px);max-height:calc(100dvh - 16px);overflow:auto;overflow-wrap:anywhere}' +
+                'header{position:sticky;top:0;z-index:1;background:#202923;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px}' +
+                'strong{font-size:13px;min-width:0}button,input{font:inherit;border-radius:6px;min-width:0}' +
+                'button{background:#347b48;color:#fff;border:1px solid #6b9977;padding:6px 10px;cursor:pointer}' +
+                'button:disabled,input:disabled{opacity:.55;cursor:wait}button:focus-visible,input:focus-visible{outline:2px solid #b7e6c5;outline-offset:2px}' +
+                '#ldh_login_toggle{flex:none;padding:3px 8px;background:transparent}' +
+                '#ldh_login_body{padding:0 10px 10px}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}' +
+                'input{flex:1 1 52px;width:64px;background:#fff;color:#17241b;border:1px solid #b6c6bb;padding:6px 8px}' +
+                '#ldh_login_btn{width:100%;margin-top:8px;background:#384c3e}' +
+                '#ldh_login_status{margin:8px 0 0;font-size:12px;color:#b7e6c5}' +
+                '</style><section aria-label="LINUX DO 登录助手">' +
+                '<header><strong>LINUX DO 登录助手</strong><button id="ldh_login_toggle" type="button" aria-controls="ldh_login_body" aria-expanded="true">收起</button></header>' +
+                '<div id="ldh_login_body"><div class="row">' +
+                '<label for="ldh_login_line">行号</label><input id="ldh_login_line" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="例如 1" autocomplete="off" aria-label="账号文件行号">' +
+                '<button id="ldh_login_fetch" type="button">获取并登录</button></div>' +
+                '<button id="ldh_login_btn" type="button">剪贴板登录</button>' +
+                '<p id="ldh_login_status" role="status" aria-live="polite">输入行号后按 Enter，或点「获取并登录」，自动填写并提交。</p>' +
+                '</div></section>';
+            root.getElementById("ldh_login_fetch").addEventListener("click", function () { run("file"); });
+            root.getElementById("ldh_login_btn").addEventListener("click", function () { run("clipboard"); });
+            root.getElementById("ldh_login_line").addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && !e.isComposing) {
+                    e.preventDefault(); e.stopPropagation();
+                    if (!e.repeat) run("file");
+                }
+            });
+            root.getElementById("ldh_login_toggle").addEventListener("click", function () {
+                const body = root.getElementById("ldh_login_body");
+                body.hidden = !body.hidden;
+                this.textContent = body.hidden ? "展开" : "收起";
+                this.setAttribute("aria-expanded", String(!body.hidden));
+            });
+        }
+
+        function reconcile() {
+            scheduled = null;
+            if (!document.body) return;
+            const nextActive = isLoginView();
+            if (nextActive) {
+                if (!active && running) stopEngine();
+                if (!panel) createPanel();
+                const mounted = !panel.isConnected;
+                if (mounted) document.body.appendChild(panel);
+                if (!active || mounted) focusLoginLine();
+                const main = document.getElementById("ldh_panel");
+                if (main && hiddenMain !== main) {
+                    hiddenMain = main; mainDisplay = main.style.display; main.style.display = "none";
+                }
+            } else {
+                if (focusCleanup) focusCleanup();
+                if (active) {
+                    ++generation;
+                    if (request) { request.abort(); request = null; }
+                    setBusy(false);
+                    status("输入行号后按 Enter，或点「获取并登录」，自动填写并提交。");
+                }
+                if (panel && panel.isConnected) panel.remove();
+                if (hiddenMain) { hiddenMain.style.display = mainDisplay; hiddenMain = null; }
+                if (!mainCreated) { mainCreated = true; createUI(); }
+                else if (active) refreshForumUser(true);
+            }
+            active = nextActive;
+            pollCaptcha();
+        }
+        function schedule() {
+            if (scheduled === null) scheduled = setTimeout(reconcile, 80);
+        }
+        const observer = new MutationObserver(schedule);
+        observer.observe(document.documentElement, {
+            childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden", "aria-hidden"]
+        });
+        window.addEventListener("resize", schedule);
+        window.addEventListener("popstate", schedule);
+        window.addEventListener("pageshow", schedule);
+        window.addEventListener("focus", schedule);
+        document.addEventListener("visibilitychange", schedule);
+
+        setInterval(function () {
+            if (active !== isLoginView() || (active && !panel.isConnected)) schedule();
+            pollCaptcha();
+        }, 1000);
+        reconcile();
+    }
+    function boot() { initLoginPage(); }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
