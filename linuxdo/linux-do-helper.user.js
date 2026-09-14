@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.4
-// @description  论坛刷帖三模式 + 等级/积分面板 + AgentRouter 签到 + AnyRouter/Credit 自动登录 + 一键获取邀请链接
+// @version      1.1.5
+// @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
 // @downloadURL  https://github.com/cler1818/Note/raw/refs/heads/main/linuxdo/linux-do-helper.user.js
@@ -2577,6 +2577,7 @@
         let mainCreated = false, hiddenMain = null, mainDisplay = "", scheduled = null;
         let captchaJob = null, captchaLoginId = 0, captchaNote = "";
         let focusCleanup = null;
+        const captchaDialogSelector = '.d-modal__container,.modal-inner-container,[role="dialog"],dialog,.modal';
 
         function focusLoginLine() {
             if (focusCleanup) focusCleanup();
@@ -2618,48 +2619,118 @@
             if (captchaJob) sendCaptcha(captchaJob.frame, "cancel", captchaJob.id);
             captchaJob = null;
         }
-        function pollCaptcha() {
-            if (!captchaJob) return;
-            if (!isLoginView() || Date.now() >= captchaJob.until) {
-                const seen = !!captchaJob.frame;
-                stopCaptcha();
-                if (seen && panel.isConnected && isLoginView()) {
-                    captchaNote = "验证码自动点击未确认，请手动勾选「我是真实访客」。";
-                    status(captchaNote);
-                }
-                return;
+        function stopCaptchaCheckbox() {
+            captchaJob.checkboxDone = true;
+            sendCaptcha(captchaJob.frame, "cancel", captchaJob.id);
+        }
+        function captchaVisible(el) {
+            if (!el || !el.isConnected || !el.getClientRects().length || el.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
+            for (let node = el; node; node = node.parentElement) {
+                const style = window.getComputedStyle(node);
+                if (style.display === "none" || style.visibility !== "visible" || style.opacity === "0") return false;
             }
-            if (document.visibilityState === "hidden") return;
-            const frame = Array.from(document.querySelectorAll("iframe[src]")).find(function (el) {
+            return true;
+        }
+        function findCaptchaFrame() {
+            return Array.from(document.querySelectorAll("iframe[src]")).find(function (el) {
                 try {
                     const url = new URL(el.src), params = new URLSearchParams(url.hash.slice(1));
                     return url.origin === HC.origin && /\/static\/hcaptcha\.html$/.test(url.pathname) &&
                         params.get("host") === "linux.do" && params.get("frame") === "checkbox" &&
-                        el.getClientRects().length && window.getComputedStyle(el).visibility === "visible";
+                        captchaVisible(el);
                 } catch (_) { return false; }
             });
-            if (!frame || !frame.contentWindow) return;
-            if (captchaJob.frame && captchaJob.frame !== frame) sendCaptcha(captchaJob.frame, "cancel", captchaJob.id);
-            captchaJob.frame = frame;
-            sendCaptcha(frame, "click", captchaJob.id);
+        }
+        function captchaDialog(frame) { return frame && frame.closest(captchaDialogSelector); }
+        function isVerifyButton(el) { return /^(?:验证|驗證|verify)$/i.test(String(el.textContent || el.value || el.getAttribute("aria-label") || "").trim()); }
+        function pollCaptcha() {
+            if (!captchaJob) return;
+            const job = captchaJob, fields = loginFields();
+            if (!isLoginView() || job.generation !== generation || (job.modal && !captchaVisible(job.modal)) ||
+                (job.fields && fields && (fields.username !== job.fields.username || fields.password !== job.fields.password ||
+                    fields.username.value !== job.values[0] || fields.password.value !== job.values[1]))) {
+                stopCaptcha(); return;
+            }
+            if (Date.now() >= job.until) {
+                stopCaptcha();
+                if (job.modal && panel.isConnected) status("自动等待验证已结束，请手动点击网页的「验证」按钮。");
+                return;
+            }
+            if (document.visibilityState === "hidden") return;
+            const frame = findCaptchaFrame(), modal = captchaDialog(frame);
+            if (modal && modal !== job.initialModal) {
+                if (job.modal && job.modal !== modal) { stopCaptcha(); return; }
+                job.modal = modal;
+            }
+            if (frame && frame.contentWindow) {
+                if (job.frame && job.frame !== frame) sendCaptcha(job.frame, "cancel", job.id);
+                job.frame = frame;
+            }
+            if (job.modal) {
+                const buttons = Array.from(job.modal.querySelectorAll('button,input[type="submit"],input[type="button"],[role="button"]'))
+                    .filter(function (el) { return isVerifyButton(el) && captchaVisible(el); });
+                const button = buttons.length === 1 ? buttons[0] : null;
+                if (button) {
+                    const blocked = button.matches(':disabled,[disabled],[aria-disabled="true"],[aria-busy="true"],.is-loading,.btn-loading') ||
+                        window.getComputedStyle(button).pointerEvents === "none";
+                    if (blocked) job.sawDisabled = true;
+                    const response = job.modal.querySelector('[name="h-captcha-response"]');
+                    // 由网站解除禁用，或已有验证通过状态，才提交；不处理图片题里的按钮。
+                    if (!blocked && (job.sawDisabled || job.verified || (response && String(response.value || "").trim()))) {
+                        stopCaptcha();
+                        captchaNote = "已点击网页「验证」，等待登录结果…";
+                        status(captchaNote);
+                        button.click(); return;
+                    }
+                }
+            }
+            if (!job.checkboxDone && Date.now() >= job.checkboxUntil) {
+                stopCaptchaCheckbox();
+                if (job.frame && panel.isConnected) {
+                    captchaNote = "验证码自动点击未确认，请手动勾选「我是真实访客」；完成后自动点击网页「验证」。";
+                    status(captchaNote);
+                }
+            }
+            if (!job.checkboxDone && frame && frame.contentWindow) sendCaptcha(frame, "click", job.id);
         }
         function armCaptcha(id) {
             if (captchaLoginId === id) return;
             stopCaptcha(); captchaLoginId = id; captchaNote = "";
-            captchaJob = { id: Date.now().toString(36) + Math.random().toString(36).slice(2), until: Date.now() + 90000, frame: null };
+            const fields = loginFields(), now = Date.now();
+            captchaJob = {
+                id: now.toString(36) + Math.random().toString(36).slice(2), generation: id,
+                until: now + 300000, checkboxUntil: now + 90000, frame: null, checkboxDone: false,
+                modal: null, initialModal: captchaDialog(findCaptchaFrame()), sawDisabled: false, verified: false,
+                fields: fields, values: fields && [fields.username.value, fields.password.value]
+            };
             setTimeout(pollCaptcha, 0);
         }
         window.addEventListener("message", function (e) {
             const data = e.data;
-            if (!captchaJob || e.origin !== HC.origin || !captchaJob.frame || e.source !== captchaJob.frame.contentWindow ||
+            if (!captchaJob || captchaJob.checkboxDone || e.origin !== HC.origin || !captchaJob.frame || e.source !== captchaJob.frame.contentWindow ||
                 !data || data.type !== HC.message || data.id !== captchaJob.id ||
                 ["clicked", "manual", "checked", "handled", "busy"].indexOf(data.state) < 0) return;
-            stopCaptcha();
-            captchaNote = data.state === "checked" ? "验证框已勾选，等待网页登录结果…" :
-                data.state === "busy" ? "验证码正在处理，请完成可能出现的图片题并等待网页登录结果。" :
-                "已点击「我是真实访客」。如果出现图片题，请手动完成，随后等待网页登录结果。";
+            captchaJob.verified = data.state === "checked";
+            stopCaptchaCheckbox();
+            captchaNote = data.state === "checked" ? "验证框已勾选，等待网页「验证」按钮可用后自动提交。" :
+                data.state === "busy" ? "验证码正在处理，请完成可能出现的图片题，完成后自动点击网页「验证」。" :
+                "已点击「我是真实访客」。图片题请手动完成，完成后自动点击网页「验证」。";
             if (panel.isConnected && isLoginView()) status(captchaNote);
+            schedule();
         });
+        function manualCaptchaAction(e) {
+            if (!captchaJob || !(e.target instanceof Element)) return;
+            const modal = captchaJob.modal || captchaDialog(findCaptchaFrame());
+            if (!modal || modal === captchaJob.initialModal || !modal.contains(e.target)) return;
+            const button = e.target.closest('button,input[type="submit"],input[type="button"],[role="button"]');
+            if (e.type !== "submit" && !button) return;
+            stopCaptcha();
+            captchaNote = e.type === "submit" || isVerifyButton(button) ? "已手动提交验证，等待登录结果…" : "已停止自动提交验证。";
+            if (panel.isConnected && isLoginView()) status(captchaNote);
+        }
+        document.addEventListener("click", manualCaptchaAction, true);
+        document.addEventListener("submit", manualCaptchaAction, true);
+        document.addEventListener("keydown", function (e) { if (e.key === "Escape" && captchaJob) stopCaptcha(); }, true);
 
         function status(message, error) {
             const el = root.getElementById("ldh_login_status");
@@ -2735,7 +2806,7 @@
                 if (id === generation) {
                     request = null; setBusy(false);
                     if (!submitted) stopCaptcha();
-                    if (submitted && isCurrent(id)) status(captchaNote || "已提交登录，等待验证码出现后自动点击「我是真实访客」；图片题请手动完成。");
+                    if (submitted && isCurrent(id)) status(captchaNote || "已提交登录，等待验证码出现后自动勾选；图片题请手动完成，完成后自动点击网页「验证」。");
                 }
             }
         }
@@ -2820,7 +2891,7 @@
         }
         const observer = new MutationObserver(schedule);
         observer.observe(document.documentElement, {
-            childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden", "aria-hidden"]
+            childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden", "aria-hidden", "disabled", "aria-disabled", "aria-busy"]
         });
         window.addEventListener("resize", schedule);
         window.addEventListener("popstate", schedule);
