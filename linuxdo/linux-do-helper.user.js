@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.5
+// @version      1.1.6
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -775,29 +775,17 @@
                 gmSet(ANY.FLOW, JSON.stringify({ step: "authorizing", ts: Date.now() }));
                 await anyStartOAuth();
             })();
-        } else if (anyIsEntryPath()) {
-            (async function () {
-                const loginPage = /^\/login\/?$/.test(location.pathname);
-                if (await siteLoggedIn()) {
-                    clearAnyBan(LD_U);
-                    if (loginPage) location.replace(ANY.HOST + "/console");
-                    return;
-                }
-                if (getNoOauth(LD_U)) { console.warn("[LDH] 无 OAuth 权限，跳过 AnyRouter 自动登录"); return; }
-                if (getAnyBan(LD_U)) { console.warn("[LDH] AnyRouter 已封禁，跳过自动登录"); return; }
-                // A direct /login visit must work even after another browser session logged in recently.
-                if (!loginPage && !autoLoginAllowed(ANY.AUTOKEY)) return;
-                if (!anyEntryAttemptAllowed()) return;
-                markAutoLogin(ANY.AUTOKEY);
-                await anyClickLoginButton();
-            })();
+        } else if (anyIsEntryPath() || anyIsConsolePath()) {
+            anyWatchLoginEntry(LD_U);
         }
         return;
     }
 
 
-    // LDH_ANY_ENTRY_20260915: direct login, delayed announcement dismissal and bounded retries.
+    // LDH_ANY_ENTRY_20260915: direct login and bounded authorization attempts.
+    // LDH_ANY_116_20260915: bookmark/SPA entry, delayed controls and translated notices.
     function anyIsEntryPath() { return isEntryPath() || location.pathname === "/login/"; }
+    function anyIsConsolePath() { return /^\/console(?:\/|$)/.test(location.pathname); }
     function anyEntryAttemptAllowed() {
         try {
             const key = "ldh_any_entry_attempts", now = Date.now();
@@ -812,11 +800,116 @@
         } catch (_) {}
         return true;
     }
+    function anyNormalText(value) {
+        return String(value || "").normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim();
+    }
+    function anyElementVisible(el, allowTransparent) {
+        if (!el || !el.getClientRects().length) return false;
+        const style = window.getComputedStyle(el);
+        return style.display !== "none" && style.visibility !== "hidden" && (allowTransparent || style.opacity !== "0");
+    }
+    function anyFindLoginButton() {
+        const nodes = document.querySelectorAll('button, a[role="button"], div[role="button"], input[type="button"], input[type="submit"]');
+        for (let i = 0; i < nodes.length; i++) {
+            const el = nodes[i];
+            if (!anyElementVisible(el)) continue;
+            const text = anyNormalText(el.value || el.textContent || el.getAttribute("aria-label"));
+            if (!text || text.length > 120 || !/linux[\s_-]*do/i.test(text)) continue;
+            if (/继续|繼續|登录|登陆|登入|授权|授權|continue|log\s*in|sign\s*in|계속|로그인|연결|続行|続ける|ログイン|連携|terus(?:kan)?|lanjut(?:kan)?|log\s*masuk|sambung|தொடர|உள்நுழை/i.test(text)) return el;
+        }
+        return null;
+    }
+    function anyIsNotice(dialog) {
+        const heading = dialog.querySelector('.semi-modal-title, [id="semi-modal-title"], h1, h2, h3, [role="heading"]');
+        const title = anyNormalText(heading ? heading.textContent : normText(dialog).slice(0,150));
+        return /系统公告|系統公告|system\s*(?:notice|announcement)|시스템\s*(?:공지(?:사항)?|알림|안내)|システム(?:の)?(?:お知らせ|通知|公告|アナウンス)|(?:notis|pengumuman)\s*sistem|சிஸ்டம்\s*அறிவிப்பு|கணினி\s*அறிவிப்பு/i.test(title);
+    }
+    function anyNoticeCloseButton(dialog) {
+        const buttons = Array.prototype.slice.call(dialog.querySelectorAll("button"));
+        const enabled = function (b) { return anyElementVisible(b) && !b.disabled && b.getAttribute("aria-disabled") !== "true"; };
+        const close = buttons.find(function (b) {
+            return enabled(b) && /^(?:关闭公告|關閉公告|关闭|關閉|close\s+(?:notice|announcement)|(?:공지(?:사항)?|알림)\s*닫기|닫기|(?:お知らせ|通知|公告)(?:を)?閉じる|閉じる|tutup(?:\s+(?:notis|pengumuman|pemberitahuan))?|(?:அறிவிப்பை\s*)?மூடு)$/i.test(anyNormalText(b.textContent));
+        });
+        if (close) return close;
+        // The notice's own X button survives browser translation of its contents.
+        return buttons.find(function (b) {
+            return enabled(b) && b.classList.contains("semi-modal-close") && /^(?:close|关闭|關閉|닫기|閉じる|tutup|மூடு)$/i.test(anyNormalText(b.getAttribute("aria-label")));
+        }) || null;
+    }
+    function anyWatchLoginEntry(ldUser) {
+        return new Promise(function (resolve) {
+            let busy = false, stopped = false, attempts = 0, retry = null;
+            let checkedPath = null, authenticated = false, observer = null, mountTimer = null;
+            function stop(result) {
+                if (stopped) return;
+                stopped = true;
+                if (observer) observer.disconnect();
+                if (retry) clearTimeout(retry);
+                if (mountTimer) clearTimeout(mountTimer);
+                window.removeEventListener("resize", step);
+                window.removeEventListener("popstate", step);
+                window.removeEventListener("hashchange", step);
+                window.removeEventListener("pagehide", onHide);
+                resolve(result);
+            }
+            function onHide() { stop(false); }
+            async function step() {
+                if (stopped || busy) return;
+                if (!anyIsEntryPath()) {
+                    // The home page reloads /console before the app routes signed-out users to /login.
+                    if (!anyIsConsolePath() || attempts) stop(false);
+                    return;
+                }
+                const path = location.pathname;
+                busy = true;
+                try {
+                    if (checkedPath !== path) {
+                        authenticated = await siteLoggedIn();
+                        if (stopped || path !== location.pathname) return;
+                        checkedPath = path;
+                    }
+                    if (authenticated) {
+                        clearAnyBan(ldUser);
+                        if (/^\/login\/?$/.test(path)) location.replace(ANY.HOST + "/console");
+                        stop(true); return;
+                    }
+                    if (getNoOauth(ldUser)) { console.warn("[LDH] 无 OAuth 权限，跳过 AnyRouter 自动登录"); stop(false); return; }
+                    if (getAnyBan(ldUser)) { console.warn("[LDH] AnyRouter 已封禁，跳过自动登录"); stop(false); return; }
+                    // Wait for the app to mount its login controls before using a click attempt.
+                    if (!anyFindLoginButton()) return;
+                    if (attempts >= 3 || !anyEntryAttemptAllowed()) { stop(false); return; }
+                    if (mountTimer) { clearTimeout(mountTimer); mountTimer = null; }
+                    attempts++;
+                    markAutoLogin(ANY.AUTOKEY);
+                    const clicked = await anyClickLoginButton();
+                    if (stopped) return;
+                    if (clicked) { stop(true); return; }
+                    if (attempts >= 3) { stop(false); return; }
+                    retry = setTimeout(step, 500);
+                } finally {
+                    busy = false;
+                    if (!stopped && path !== location.pathname) {
+                        if (retry) clearTimeout(retry);
+                        retry = setTimeout(step, 0);
+                    }
+                }
+            }
+            observer = new MutationObserver(step);
+            observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class", "style", "hidden", "disabled", "aria-hidden", "aria-disabled"] });
+            window.addEventListener("resize", step);
+            window.addEventListener("popstate", step);
+            window.addEventListener("hashchange", step);
+            window.addEventListener("pagehide", onHide, { once: true });
+            mountTimer = setTimeout(function () { stop(false); }, 60000);
+            step();
+        });
+    }
     async function anyClickLoginButton() {
-        if (location.hostname !== "anyrouter.top" || !anyIsEntryPath()) return;
+        if (location.hostname !== "anyrouter.top" || !anyIsEntryPath()) return false;
         const page = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
         const originalOpen = page.open, dismissed = new WeakSet();
         let installedOpen = null, forwarded = false, leaving = false, readySince = 0;
+        let lastScrollButton = null, lastScrollAt = 0;
         function restore() {
             leaving = true;
             if (installedOpen && page.open === installedOpen) page.open = originalOpen;
@@ -833,49 +926,51 @@
             }
             return originalOpen.apply(page, arguments);
         }
-        function visible(el) {
-            if (!el || !el.getClientRects().length) return false;
-            const style = window.getComputedStyle(el);
-            return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
-        }
         function findReadyButton() {
             let announcement = false;
             const dialogs = document.querySelectorAll('[role="dialog"]');
             for (let i = 0; i < dialogs.length; i++) {
                 const dialog = dialogs[i];
-                if (!visible(dialog) || !/系统公告|system announcement/i.test(normText(dialog).slice(0,100))) continue;
+                // A paused opening animation can leave opacity at zero while its mask still blocks input.
+                if (!anyElementVisible(dialog, true) || dialog.getAttribute("aria-hidden") === "true" || !anyIsNotice(dialog)) continue;
                 announcement = true;
-                const close = Array.prototype.slice.call(dialog.querySelectorAll("button")).find(function (b) {
-                    return /^(关闭公告|close announcement)$/i.test(normText(b)) && visible(b) && !b.disabled;
-                });
+                const close = anyNoticeCloseButton(dialog);
                 if (close && !dismissed.has(close)) { dismissed.add(close); close.click(); }
             }
             if (announcement) { readySince = 0; return null; }
-            const button = findLdLoginBtn();
-            if (!visible(button) || button.disabled || button.getAttribute("aria-disabled") === "true") { readySince = 0; return null; }
+            const button = anyFindLoginButton();
+            if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") { readySince = 0; return null; }
             const r = button.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-            if (!hit || !button.contains(hit)) { readySince = 0; return null; }
+            if (!hit || !button.contains(hit)) {
+                readySince = 0;
+                const now = Date.now();
+                if (lastScrollButton !== button || now - lastScrollAt >= 1000) {
+                    lastScrollButton = button; lastScrollAt = now;
+                    try { button.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }); } catch (_) {}
+                }
+                return null;
+            }
             if (!readySince) readySince = Date.now();
             return Date.now() - readySince >= 600 ? button : null;
         }
         try {
             page.open = openForLogin;
             installedOpen = page.open;
-            if (installedOpen === originalOpen) { await anyStartOAuth(); return; }
+            if (installedOpen === originalOpen) { await anyStartOAuth(); return true; }
             window.addEventListener("pagehide", restore, { once: true });
             const clicked = await waitAndClick(findReadyButton, 12000);
             if (!clicked) {
-                console.warn("[LDH] AnyRouter 登录按钮仍被遮挡或不可用，本页停止自动点击");
-                return;
+                console.warn("[LDH] AnyRouter 登录按钮仍被遮挡或不可用，本次停止自动点击");
+                return false;
             }
             const deadline = Date.now() + 20000;
             while (!forwarded && !leaving && anyIsEntryPath() && Date.now() < deadline) await arWait(100);
+            return true;
         } finally {
             restore();
             window.removeEventListener("pagehide", restore);
         }
     }
-
     async function anyStartOAuth() {
         try {
             const sres = await fetchTimed("/api/status", { credentials: "include", cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return null; });
