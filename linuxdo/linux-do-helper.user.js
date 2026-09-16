@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.6
+// @version      1.1.8
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -26,6 +26,7 @@
 // @connect      credit.linux.do
 // @connect      agentrouter.org
 // @connect      api.github.com
+// @connect      any.909724.xyz
 // @run-at       document-end
 // ==/UserScript==
 
@@ -733,6 +734,7 @@
     // AnyRouter 页面。
     if (location.hostname === "anyrouter.top") {
         const LD_U = currentLdUser();
+        try { anyInitTokenTools(); } catch (_) { console.warn("[LDH] 令牌工具初始化失败"); }
 
         (function watchAnyBan() {
             let finished = false;
@@ -780,6 +782,462 @@
         }
         return;
     }
+
+
+    // LDH_ANY_TOKEN_118_20260916 BEGIN
+    function anyTokenAmountBody(text, perUnit) {
+        const value = String(text || "").trim();
+        if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) || value.length > 30) throw new Error("请输入大于 0 的数字额度");
+        const parts = value.split(".");
+        const whole = (parts[0] || "0").replace(/^0+(?=\d)/, "");
+        const fraction = (parts[1] || "").replace(/0+$/, "");
+        const name = whole + (fraction ? "." + fraction : "");
+        if (!Number.isSafeInteger(perUnit) || perUnit <= 0) throw new Error("无法读取额度换算比例，请刷新页面");
+        const denominator = 10n ** BigInt(fraction.length);
+        const units = BigInt(whole + fraction) * BigInt(perUnit);
+        if (units <= 0n || units % denominator !== 0n || units / denominator > BigInt(Number.MAX_SAFE_INTEGER)) {
+            throw new Error("额度过大或小数精度过高，请调整数字");
+        }
+        return { name: name, remain_quota: Number(units / denominator), expired_time: -1,
+            unlimited_quota: false, model_limits_enabled: false, model_limits: "", allow_ips: "", group: "" };
+    }
+
+    function anyTokenNewRows(rows, before, spec) {
+        const known = new Set(before.map(String));
+        return rows.filter(function (row) {
+            return row && row.id != null && !known.has(String(row.id)) && String(row.name || "") === String(spec.name || "");
+        });
+    }
+
+    function anyInitTokenTools() {
+        const pageWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+        if (pageWindow.__ldhAnyToken118) return;
+        pageWindow.__ldhAnyToken118 = true;
+        const ENDPOINT = "https://any.909724.xyz/api/import-token";
+        const REMOVE_ENDPOINT = "https://any.909724.xyz/api/remove-token";
+        const KEY = "ldh_any_import_key";
+        const PENDING = "ldh_any_import_pending:";
+        const JOURNAL = "ldh_any_create_pending:";
+        const NOTICE = "ldh_any_token_notice:";
+        const DELETIONS = "ldh_any_delete_pending:";
+        const rawFetch = pageWindow.fetch.bind(pageWindow);
+        let box = null, busy = false, pumping = false, removing = false, reconciling = false, lastAccount = "", mountScheduled = false;
+        let message = "新建令牌成功后会自动导入查询网站", tone = "info";
+        function account() { const u = getStoredUser(); return u && u.id ? String(u.id) : ""; }
+        function onTokenPage() { return /^\/console\/token\/?$/.test(location.pathname); }
+        function read(store, key, fallback) { try { return JSON.parse(store.getItem(key) || "null") || fallback; } catch (_) { return fallback; } }
+        function records(store, prefix, who) {
+            const result = [];
+            for (let i = 0; i < store.length; i++) {
+                const key = store.key(i);
+                if (!key || key.indexOf(prefix + who + ":") !== 0) continue;
+                const value = read(store, key, null);
+                if (value && value.account === who) result.push({ key: key, value: value });
+            }
+            return result;
+        }
+        function pending(who) { return records(localStorage, PENDING, who); }
+        function journals(who) { return records(sessionStorage, JOURNAL, who); }
+        function deletions(who) { return records(localStorage, DELETIONS, who); }
+        function deleting(who, id) { return deletions(who).some(function (item) { return item.value.id === id; }); }
+        function say(text, kind) {
+            message = text; tone = kind || "info";
+            const who = account();
+            if (who) sessionStorage.setItem(NOTICE + who, JSON.stringify({ text: text, tone: tone, at: Date.now() }));
+            paint();
+        }
+        function paint() {
+            if (!box || !box.isConnected) return;
+            const count = pending(account()).length + journals(account()).length + deletions(account()).length;
+            box.querySelector('[data-part="status"]').textContent = message + (count ? "（待同步 " + count + " 项）" : "");
+            box.querySelector('[data-part="status"]').style.color = tone === "error" ? "var(--semi-color-danger, #c93535)" : "var(--semi-color-text-1, #4b5563)";
+            box.querySelector('[data-part="create"]').disabled = busy || journals(account()).length > 0;
+            box.querySelector('[data-part="retry"]').hidden = !count;
+            box.querySelector('[data-part="retry"]').disabled = pumping || removing || reconciling;
+        }
+        function isCreate(method, url) {
+            try { const u = new URL(url, location.href); return String(method || "GET").toUpperCase() === "POST" && u.origin === location.origin && /^\/api\/token\/?$/.test(u.pathname); }
+            catch (_) { return false; }
+        }
+        function deleteId(method, url) {
+            try {
+                const u = new URL(url, location.href), match = u.pathname.match(/^\/api\/token\/([1-9]\d*)\/?$/);
+                return String(method || "GET").toUpperCase() === "DELETE" && u.origin === location.origin && match ? match[1] : "";
+            } catch (_) { return ""; }
+        }
+        function fullToken(row) {
+            const key = row && row.key;
+            if (typeof key !== "string") throw new Error("无法读取完整令牌，请刷新后重试");
+            const token = key.indexOf("sk-") === 0 ? key : "sk-" + key;
+            if (!/^sk-[A-Za-z0-9_-]{20,256}$/.test(token)) throw new Error("无法读取完整令牌，请刷新后重试");
+            return token;
+        }
+        async function fingerprint(row) {
+            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(fullToken(row)));
+            return Array.from(new Uint8Array(digest), function (byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+        }
+        function bodySpec(body) {
+            try { const value = typeof body === "string" ? JSON.parse(body) : null; return value && typeof value.name === "string" ? value : null; }
+            catch (_) { return null; }
+        }
+        async function api(path, who, options) {
+            if (!who || account() !== who) throw new Error("登录账号已变化，请回到原账号重试同步");
+            const controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 12000);
+            try {
+                const response = await rawFetch(path, Object.assign({}, options || {}, { credentials: "same-origin", cache: "no-store", signal: controller.signal,
+                    headers: Object.assign({ "New-Api-User": who }, (options || {}).headers || {}) }));
+                const data = await response.json();
+                if (!response.ok || !data || data.success !== true) throw new Error("AnyRouter 请求未成功，请稍后重试同步");
+                return data.data;
+            } finally { clearTimeout(timer); }
+        }
+        async function listTokens(who) {
+            let rows = [], seen = new Set();
+            for (let p = 0; p < 100; p++) {
+                const value = await api("/api/token/?p=" + p + "&size=100", who);
+                const data = Array.isArray(value) ? value : value && value.items;
+                if (!Array.isArray(data)) throw new Error("令牌列表格式变化，请稍后重试同步");
+                if (!data.length) return rows;
+                const fresh = data.filter(function (item) { return item.id != null && !seen.has(String(item.id)); });
+                if (!fresh.length) throw new Error("令牌分页读取异常，请刷新后重试");
+                fresh.forEach(function (item) { seen.add(String(item.id)); rows.push(item); });
+                if (data.length < 100 && (!value.total || rows.length >= value.total)) return rows;
+            }
+            throw new Error("令牌数量超出单次同步范围");
+        }
+        async function begin(spec) {
+            const who = account();
+            if (!who || !spec) return null;
+            const rows = await listTokens(who);
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+            const op = { account: who, before: rows.map(function (r) { return String(r.id); }), spec: { name: spec.name }, at: Date.now(), state: "prepared" };
+            const key = JOURNAL + who + ":" + id;
+            sessionStorage.setItem(key, JSON.stringify(op));
+            return { key: key, value: op };
+        }
+        function markSent(op) {
+            if (!op) return;
+            op.value.state = "sent";
+            sessionStorage.setItem(op.key, JSON.stringify(op.value));
+            paint();
+        }
+        function forget(op) { if (op) sessionStorage.removeItem(op.key); paint(); }
+        async function discover(op) {
+            const data = op.value;
+            const rows = await listTokens(data.account);
+            const fresh = anyTokenNewRows(rows, data.before, data.spec);
+            if (!fresh.length) return false;
+            fresh.forEach(function (row) {
+                const key = PENDING + data.account + ":" + row.id;
+                if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({ account: data.account, id: String(row.id), name: String(row.name || ""), attempts: 0, next: 0 }));
+            });
+            if (op.copyRequested) {
+                op.copyRequested = false;
+                if (fresh.length === 1) {
+                    try { await inviteCopy(fullToken(fresh[0])); op.copyNotice = "令牌已复制到剪贴板"; }
+                    catch (_) { op.copyNotice = "自动复制未完成，请使用列表中的复制按钮"; }
+                } else { op.copyNotice = "存在多个同名新令牌，请在列表选择需要复制的令牌"; }
+                say(op.copyNotice + "；正在导入查询网站…");
+            }
+            forget(op);
+            return true;
+        }
+        async function finish(op, response) {
+            if (!op) return;
+            if (response && response.success === false) { forget(op); say("AnyRouter 未创建成功，请检查原页面的提示", "error"); return; }
+            op.value.state = response && response.success === true ? "confirmed" : "uncertain";
+            sessionStorage.setItem(op.key, JSON.stringify(op.value));
+            say("正在识别新令牌并导入查询网站…");
+            try {
+                let found = false;
+                for (let n = 0; n < 3 && !found; n++) {
+                    if (n) await new Promise(function (resolve) { setTimeout(resolve, n * 600); });
+                    found = await discover(op);
+                }
+                if (!found) { say("尚未确认新令牌，请点“重试同步”核对；不会重复创建", "error"); return; }
+                await pump();
+                if (op.copyNotice) say(message + "；" + op.copyNotice, tone);
+            } catch (_) { say("创建结果待同步，请点“重试同步”；不会重复创建", "error"); }
+        }
+        function websiteRequest(url, payload, accept) {
+            return new Promise(function (resolve, reject) {
+                const secret = String(gmGet(KEY, "") || "").trim();
+                if (!secret) { reject(new Error("请先在油猴菜单设置查询网站同步密钥")); return; }
+                let done = false;
+                const timer = setTimeout(function () { end(new Error("网站同步超时，请稍后重试")); }, 15000);
+                function end(error, data) { if (done) return; done = true; clearTimeout(timer); error ? reject(error) : resolve(data); }
+                try {
+                    GM_xmlhttpRequest({ method: "POST", url: url, anonymous: true, timeout: 12000,
+                        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + secret },
+                        data: JSON.stringify(payload),
+                        onload: function (response) {
+                            let data; try { data = JSON.parse(response.responseText); } catch (_) {}
+                            if (data && data.error === "token_deleted") { const error = new Error("令牌已删除，已停止自动导入"); error.code = "token_deleted"; end(error); }
+                            else if (response.status >= 200 && response.status < 300 && data && data.ok === true && accept(data)) end(null, data);
+                            else end(new Error(response.status === 401 ? "网站同步密钥无效，请在油猴菜单更新" : "网站暂未确认同步，请稍后重试"));
+                        },
+                        onerror: function () { end(new Error("无法连接查询网站，请稍后重试")); },
+                        ontimeout: function () { end(new Error("网站同步超时，请稍后重试")); }
+                    });
+                } catch (_) { end(new Error("无法发起同步，请检查油猴的跨域授权")); }
+            });
+        }
+        function sendImport(token, note) {
+            return websiteRequest(ENDPOINT, { token: token, note: note.replace(/[\x00-\x1f]/g, " ").slice(0, 128) }, function (data) { return data.added + data.duplicate === 1; });
+        }
+        function sendRemoval(fp) {
+            return websiteRequest(REMOVE_ENDPOINT, { fingerprints: [fp] }, function (data) { return Number.isInteger(data.removed) && data.removed >= 0 && Number.isInteger(data.missing) && data.missing >= 0; });
+        }
+        async function tokenRecord(who, id) {
+            const data = await api("/api/token/" + encodeURIComponent(id), who);
+            if (data && String(data.id) === id && typeof data.key === "string" && !data.key.includes("*")) return data;
+            return (await listTokens(who)).find(function (row) { return String(row.id) === id; });
+        }
+        async function beginDelete(id) {
+            const who = account();
+            if (!who || !id) return null;
+            const row = await tokenRecord(who, id);
+            if (!row || String(row.id) !== id) throw new Error("未读取到待删除令牌");
+            const op = { key: DELETIONS + who + ":" + id + ":" + Date.now().toString(36) + Math.random().toString(36).slice(2),
+                value: { account: who, id: id, fp: await fingerprint(row), name: String(row.name || ""), state: "prepared", at: Date.now(), attempts: 0, next: 0 } };
+            localStorage.setItem(op.key, JSON.stringify(op.value));
+            return op;
+        }
+        function forgetDelete(op) { if (op) localStorage.removeItem(op.key); paint(); }
+        function markDeleteSent(op) {
+            if (!op) return;
+            op.value.state = "sent"; op.value.at = Date.now();
+            localStorage.setItem(op.key, JSON.stringify(op.value)); paint();
+        }
+        async function finishDelete(op, response) {
+            if (!op) return;
+            if (response && response.success === false) { forgetDelete(op); say("AnyRouter 删除未成功，网站白名单已保留", "error"); return; }
+            op.value.state = response && response.success === true ? "verify" : "uncertain";
+            localStorage.setItem(op.key, JSON.stringify(op.value));
+            await pumpDeletes(true);
+        }
+        async function pumpDeletes(force) {
+            if (removing || !account()) return;
+            removing = true; paint();
+            const who = account();
+            let removed = 0, missing = 0, finished = 0, error = "";
+            try {
+                const entries = deletions(who).filter(function (item) {
+                    const value = item.value;
+                    return value.state !== "prepared" && (value.state !== "sent" || Date.now() - value.at > 30000) && (force || (value.attempts < 3 && value.next <= Date.now()));
+                });
+                if (!entries.length) return;
+                let existing = null, verificationFailed = false;
+                if (entries.some(function (item) { return item.value.state !== "confirmed"; })) {
+                    try { existing = new Set((await listTokens(who)).map(function (row) { return String(row.id); })); }
+                    catch (_) { verificationFailed = true; }
+                }
+                for (const item of entries) {
+                    const record = item.value;
+                    if (account() !== who) break;
+                    try {
+                        if (record.state !== "confirmed") {
+                            if (verificationFailed) throw new Error("暂时无法确认 AnyRouter 删除结果，白名单已保留");
+                            if (existing.has(record.id)) throw new Error("AnyRouter 中仍有待删除令牌，白名单已保留");
+                            record.state = "confirmed";
+                            localStorage.setItem(item.key, JSON.stringify(record));
+                        }
+                        localStorage.removeItem(PENDING + who + ":" + record.id);
+                        const result = await sendRemoval(record.fp);
+                        removed += result.removed; missing += result.missing; finished++;
+                        localStorage.removeItem(item.key);
+                    } catch (e) {
+                        record.attempts = (record.attempts || 0) + 1;
+                        record.next = Date.now() + (record.attempts === 1 ? 15000 : 60000);
+                        localStorage.setItem(item.key, JSON.stringify(record));
+                        error = e && e.message || "网站删除同步暂未完成";
+                    }
+                }
+            } finally {
+                removing = false;
+                if (error) say(error + "；请点“重试同步”", "error");
+                else if (finished) say("已同步删除网站白名单 " + removed + " 项" + (missing ? "；另有 " + missing + " 项原本不在白名单中" : ""), "success");
+                paint();
+            }
+        }
+        async function pump(force) {
+            if (pumping || !account()) return;
+            pumping = true; paint();
+            let successes = 0, error = "";
+            const who = account();
+            try {
+                const entries = pending(who);
+                for (const item of entries) {
+                    const record = item.value;
+                    if (!localStorage.getItem(item.key) || deleting(who, record.id)) continue;
+                    if (!force && (record.attempts >= 3 || record.next > Date.now())) continue;
+                    if (account() !== who) break;
+                    try {
+                        const row = await tokenRecord(who, record.id);
+                        if (!row || String(row.name || "") !== record.name || typeof row.key !== "string") throw new Error("令牌已删除或改名，请先核对原账号的令牌");
+                        const token = fullToken(row);
+                        if (!localStorage.getItem(item.key) || deleting(who, record.id)) continue;
+                        await sendImport(token, record.name);
+                        localStorage.removeItem(item.key); successes++;
+                    } catch (e) {
+                        if (e && e.code === "token_deleted" || !localStorage.getItem(item.key)) { localStorage.removeItem(item.key); continue; }
+                        record.attempts = (record.attempts || 0) + 1;
+                        record.next = Date.now() + (record.attempts === 1 ? 15000 : 60000);
+                        localStorage.setItem(item.key, JSON.stringify(record));
+                        error = e && e.message || "导入暂未完成，请重试";
+                    }
+                }
+            } finally {
+                pumping = false;
+                if (error) say("令牌已创建；" + error + "。重试同步不会重复生成", "error");
+                else if (successes) say("已自动导入 " + successes + " 个令牌，可在查询网站查询额度", "success");
+                paint();
+            }
+        }
+        async function retry(force) {
+            if (reconciling) return;
+            reconciling = true; paint();
+            try {
+                for (const op of journals(account())) {
+                    if (op.value.state === "prepared") { forget(op); continue; }
+                    if (!(await discover(op))) say("未找到可确认的新令牌，请先核对原页面；不会自动再次创建", "error");
+                }
+                await pump(force);
+                await pumpDeletes(force);
+            } catch (_) { say("暂时无法同步令牌，请确认登录状态后重试", "error"); }
+            finally { reconciling = false; paint(); }
+        }
+        async function quickCreate() {
+            if (busy) return;
+            let spec;
+            try {
+                if (!String(gmGet(KEY, "") || "").trim()) throw new Error("请先在油猴菜单设置查询网站同步密钥");
+                const status = read(localStorage, "status", {});
+                spec = anyTokenAmountBody(box.querySelector("input").value, Number(status.quota_per_unit));
+                if (journals(account()).length) throw new Error("上次创建结果待确认，请先点“重试同步”");
+            } catch (e) { say(e.message, "error"); return; }
+            busy = true; paint();
+            let op = null, sent = false, created = false;
+            try {
+                say("正在创建名称和额度均为 " + spec.name + " 的令牌…");
+                op = await begin(spec);
+                if (!op) throw new Error("请先登录 AnyRouter");
+                op.copyRequested = true;
+                if (account() !== op.value.account) throw new Error("登录账号已变化");
+                markSent(op); sent = true;
+                let body;
+                const controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 15000);
+                try {
+                    const response = await rawFetch("/api/token/", { method: "POST", credentials: "same-origin", signal: controller.signal,
+                        headers: { "Content-Type": "application/json", "New-Api-User": op.value.account }, body: JSON.stringify(spec) });
+                    body = await response.json();
+                    created = response.ok && body && body.success === true;
+                    if (body && body.success === false) { forget(op); say("创建失败：" + String(body.message || "请检查额度和账号状态").replace(/sk-[A-Za-z0-9_-]+/g, "[令牌]").slice(0, 160), "error"); return; }
+                } finally { clearTimeout(timer); }
+                await finish(op, body);
+            } catch (_) {
+                if (op && sent) await finish(op, null);
+                else { forget(op); say("创建前检查失败，请确认登录和网络后重试", "error"); }
+            } finally {
+                busy = false; paint();
+                if (created) { busy = true; paint(); setTimeout(function () { if (onTokenPage()) location.reload(); else { busy = false; paint(); } }, 900); }
+            }
+        }
+        function observeRequests() {
+            const xhr = pageWindow.XMLHttpRequest && pageWindow.XMLHttpRequest.prototype;
+            if (xhr) {
+                const originalOpen = xhr.open, originalSend = xhr.send, originalAbort = xhr.abort;
+                const requests = new WeakMap();
+                xhr.open = function (method, url, async) {
+                    const previous = requests.get(this); if (previous) previous.cancelled = true;
+                    const result = originalOpen.apply(this, arguments);
+                    requests.set(this, { create: async !== false && isCreate(method, url), deleteId: async !== false ? deleteId(method, url) : "", cancelled: false });
+                    return result;
+                };
+                xhr.abort = function () {
+                    const record = requests.get(this); if (record) { record.cancelled = true; if (!record.sent) { if (record.deleteId) forgetDelete(record.op); else forget(record.op); } }
+                    return originalAbort.apply(this, arguments);
+                };
+                xhr.send = function (body) {
+                    const record = requests.get(this), spec = bodySpec(body), self = this, args = arguments;
+                    if (!record || !(record.deleteId || record.create && spec) || !account()) return originalSend.apply(this, args);
+                    (async function () {
+                        const done = record.deleteId ? finishDelete : finish;
+                        try { record.op = record.deleteId ? await beginDelete(record.deleteId) : await begin(spec); }
+                        catch (_) { say("暂时无法读取操作前的令牌，本次请核对网站白名单", "error"); }
+                        if (record.cancelled || self.readyState !== 1) { if (record.deleteId) forgetDelete(record.op); else forget(record.op); return; }
+                        self.addEventListener("loadend", function completed() {
+                            self.removeEventListener("loadend", completed);
+                            let response;
+                            try { response = self.responseType === "json" ? self.response : JSON.parse(self.responseText); } catch (_) {}
+                            done(record.op, response).catch(function () { say("令牌同步暂未完成，请重试同步", "error"); });
+                        });
+                        if (record.deleteId) markDeleteSent(record.op); else markSent(record.op); record.sent = true;
+                        try { originalSend.apply(self, args); }
+                        catch (_) { done(record.op, null).catch(function () {}); }
+                    })().catch(function () { say("令牌同步暂未完成，请刷新核对", "error"); });
+                };
+            }
+            pageWindow.fetch = function (input, options) {
+                const method = options && options.method || input && input.method || "GET";
+                const url = typeof input === "string" || input instanceof URL ? String(input) : input && input.url;
+                const deletingId = deleteId(method, url);
+                if (!(isCreate(method, url) || deletingId) || !account()) return rawFetch(input, options);
+                return (async function () {
+                    let spec = bodySpec(options && options.body), op = null;
+                    const done = deletingId ? finishDelete : finish;
+                    if (!deletingId && !spec && input && typeof input.clone === "function") { try { spec = bodySpec(await input.clone().text()); } catch (_) {} }
+                    if (deletingId || spec) { try { op = deletingId ? await beginDelete(deletingId) : await begin(spec); } catch (_) { say("操作前令牌读取失败，请核对白名单同步结果", "error"); } }
+                    const signal = options && options.signal || input && input.signal;
+                    if (signal && signal.aborted) { if (deletingId) forgetDelete(op); else forget(op); return rawFetch(input, options); }
+                    if (deletingId) markDeleteSent(op); else markSent(op);
+                    try {
+                        const response = await rawFetch(input, options);
+                        response.clone().json().then(function (body) { return done(op, body); }, function () { return done(op, null); }).catch(function () {});
+                        return response;
+                    } catch (e) { done(op, null).catch(function () {}); throw e; }
+                })();
+            };
+        }
+        function mount() {
+            mountScheduled = false;
+            if (!onTokenPage() || !account()) { if (box) box.remove(); box = null; return; }
+            const who = account();
+            if (who !== lastAccount) {
+                lastAccount = who;
+                const saved = read(sessionStorage, NOTICE + who, null);
+                if (saved && Date.now() - saved.at < 180000) { message = saved.text; tone = saved.tone; }
+                else { message = "新建令牌成功后会自动导入查询网站"; tone = "info"; }
+                retry(false);
+            }
+            if (box && box.isConnected) return;
+            const main = document.querySelector("main.semi-layout-content") || document.querySelector("main");
+            if (!main) return;
+            box = document.createElement("section"); box.id = "ldh-any-token-tools";
+            box.style.cssText = "box-sizing:border-box;width:100%;min-width:0;margin:0 0 12px;padding:14px;border:1px solid var(--semi-color-border,#dbe1ea);border-radius:12px;background:var(--semi-color-bg-1,#fff);color:var(--semi-color-text-0,#1f2937);font-size:13px;";
+            box.innerHTML = '<form style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0"><label for="ldh-any-token-amount" style="font-weight:600">快速创建令牌 · 额度（美元）</label><input id="ldh-any-token-amount" inputmode="decimal" type="text" autocomplete="off" placeholder="例如 100" aria-label="令牌额度（美元）" style="box-sizing:border-box;width:145px;max-width:100%;padding:7px 9px;border:1px solid var(--semi-color-border,#ccd3df);border-radius:6px;background:var(--semi-color-bg-2,#fff);color:inherit"><button type="submit" data-part="create" style="padding:7px 12px;border:0;border-radius:6px;background:#3370ff;color:white;cursor:pointer">创建并导入</button><button type="button" data-part="retry" hidden style="padding:6px 10px;border:1px solid #b4bdcc;border-radius:6px;background:transparent;color:inherit;cursor:pointer">重试同步</button><a href="https://any.909724.xyz/" target="_blank" rel="noopener noreferrer" style="color:#3370ff">查询网站</a></form><div style="margin-top:7px;font-size:12px;opacity:.8">名称使用输入的数字；有效期、分组、模型和 IP 限制沿用新建默认值。快速创建后自动复制。原有“添加令牌”也会自动导入；删除成功后同步移除网站白名单。</div><div role="status" aria-live="polite" data-part="status" style="margin-top:7px;overflow-wrap:anywhere"></div>';
+            const style = document.createElement("style");
+            style.textContent = '#ldh-any-token-tools input,#ldh-any-token-tools button{scroll-margin-top:76px}#ldh-any-token-tools button:disabled{opacity:.55;cursor:not-allowed!important}@media(max-width:700px){#ldh-any-token-tools label{flex-basis:100%}}';
+            box.prepend(style);
+            box.querySelector("form").addEventListener("submit", function (event) { event.preventDefault(); quickCreate(); });
+            box.querySelector('[data-part="retry"]').addEventListener("click", function () { retry(true); });
+            main.prepend(box); paint();
+        }
+        function scheduleMount() { if (!mountScheduled) { mountScheduled = true; setTimeout(mount, 120); } }
+        // Network observation is restricted to token creation/deletion; existing login helpers stay unchanged.
+        observeRequests();
+        try { GM_registerMenuCommand("设置查询网站同步密钥", function () {
+            const value = prompt("输入查询网站的专用同步密钥（留空不修改）", "");
+            if (value && value.trim()) { gmSet(KEY, value.trim()); say("导入密钥已保存在当前浏览器"); retry(true); }
+        }); } catch (_) {}
+        const observer = new MutationObserver(scheduleMount);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        window.addEventListener("popstate", scheduleMount);
+        window.addEventListener("online", function () { if (onTokenPage()) retry(false); });
+        setInterval(function () { mount(); if (onTokenPage() && !busy && !reconciling) { pump(false); pumpDeletes(false); } }, 2000);
+        mount();
+    }
+    // LDH_ANY_TOKEN_118_20260916 END
 
 
     // LDH_ANY_ENTRY_20260915: direct login and bounded authorization attempts.
