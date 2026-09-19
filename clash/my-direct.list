@@ -46,3 +46,6 @@ DOMAIN-SUFFIX,webnote.cc
 
 # linuxdo论坛邀请链接
 DOMAIN,invite.linuxdo.org
+
+# 闲管家-闲鱼客服聊天
+DOMAIN-SUFFIX,goofish.pro,DIRECT
