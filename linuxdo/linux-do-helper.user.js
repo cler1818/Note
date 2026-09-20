@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.9
+// @version      1.1.10
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -472,130 +472,163 @@
             return yes ? yes.getAttribute("href") : null;
         } catch (_) { return null; }
     }
-    async function arOAuth(say, withLogout) {
-        if (withLogout) { say("退出登录…"); await gmFetch(AR.HOST + "/api/user/logout", { userHeader: true }).catch(function () {}); }
-        say("获取 state…");
-        const st = await gmJsonRetry(AR.HOST + "/api/oauth/state?mode=login", { userHeader: false }, 2);
-        const state = st.data;
-        if (!state) throw new Error("未拿到 state");
-        say("请求授权页…");
-        const a = await gmFetch(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(state), {
-            userHeader: false, headers: { "Accept": "text/html,application/xhtml+xml" }
-        });
-        if (a.status >= 400 || CF_CHALLENGE_RE.test(a.responseText || "")) throw arNonJsonError(a, a.finalUrl);
-        let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
-        if (!cs) {
-
-            if (detectNoOauth(a.responseText)) throw noOauthError();
-            const ap = parseApprove(a.responseText);
-            if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
-            say("点击允许…");
-            const approved = await gmFetch(new URL(ap, CONNECT_HOST).href, {
-                userHeader: false, headers: { "Accept": "text/html,application/xhtml+xml" }
-            });
-            cs = paramsFrom(approved.finalUrl) || paramsFromText(approved.responseText);
-        }
-        if (!cs) throw new Error("授权完成但没返回code/state");
-        if (String(cs.state) !== String(state)) throw new Error("授权 state 不匹配，请重新登录。");
-
-        say("提交签到回调…");
-        const cb = await gmJson(AR.HOST + "/api/oauth/linuxdo?code=" + encodeURIComponent(cs.code) +
-            "&state=" + encodeURIComponent(cs.state) + "&mode=login", { userHeader: false });
-        if (!cb || !cb.data || !cb.data.id) throw new Error("回调成功但缺少用户信息");
-        setArUid(cb.data.id);
-        say("读取账户…");
-        const self = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1).catch(function () { return null; });
-        const user = self && self.data && self.data.id ? self.data : cb.data;
-        setArUid(user.id);
-        return { user: user, checkedIn: cb.data.checked_in === true, source: "code" };
+    // LDH_AGENT_SESSION_1110 BEGIN
+    function arSessionExpired(message) {
+        return /not logged in|login has expired|login expired|please log in again|未登录|尚未登录|登录.{0,5}(失效|过期)|重新登录/i.test(String(message || ""));
     }
-
-    function arFallbackTab(say) {
-        return new Promise(function (resolve, reject) {
-            gmSet(AR.FLOW, { step: "start", ts: Date.now() });
-            let handle = null;
-            try { handle = GM_openInTab(AR.HOST + "/login?ar_auto=1", { active: true, insert: true, setParent: true }); }
-            catch (e) { gmDel(AR.FLOW); reject(new Error("无法打开授权标签")); return; }
-            if (!handle) { gmDel(AR.FLOW); reject(new Error("无法打开授权标签")); return; }
-            say("标签授权兜底中…");
-            const started = Date.now();
-            const iv = setInterval(function () {
-                const flow = gmGet(AR.FLOW, null);
-                if (handle.closed) {
-                    clearInterval(iv); gmDel(AR.FLOW); reject(new Error("授权标签已关闭。"));
-                } else if (flow && flow.step === "done") {
-                    clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
-                    if (flow.noOauth) reject(noOauthError());
-                    else if (flow.error) reject(new Error(flow.error));
-                    else resolve({ checkedIn: flow.checkedIn === true, source: "tab" });
-                } else if (Date.now() - started > AR.TAB_TIMEOUT) {
-                    clearInterval(iv); gmDel(AR.FLOW); try { handle.close(); } catch (_) {}
-                    reject(new Error("授权超时(可能需人工过验证)"));
-                }
-            }, 700);
-        });
-    }
-
-    const AR_QPD_FALLBACK = 500000;
-    async function arBalance(userData, opts) {
-        opts = opts || {};
-        const waitFirst = opts.waitFirst || 0;
-        const retries = opts.retries === undefined ? 3 : opts.retries;
-        if (waitFirst > 0) await arWait(waitFirst);
-
-        let u = userData, lastErr = null;
-
-        if (!u || typeof u.quota === "undefined") {
-
-            if (arUid() <= 0) await waitArUid(3000);
-            if (arUid() <= 0) throw new Error("尚未取得 AgentRouter 账号ID，点击重试");
-            for (let i = 0; i <= retries; i++) {
-                try {
-                    const s = await gmJson(AR.HOST + "/api/user/self", { userHeader: true });
-                    u = s && s.data;
-                    if (u && typeof u.quota !== "undefined") { lastErr = null; break; }
-                    lastErr = new Error("返回里没有 quota 字段");
-                } catch (e) { lastErr = e; }
-                if (i < retries) await arWait(1000 * (i + 1));
-            }
-        }
-        if (!u || typeof u.quota === "undefined") {
-            throw lastErr || new Error("读不到账户额度");
-        }
-        let qpd = AR_QPD_FALLBACK;
+    async function arPageJson(path, headers) {
+        const controller = new AbortController();
+        const timer = setTimeout(function () { controller.abort(); }, 6000);
+        let response, body;
         try {
-            const st = await gmJson(AR.HOST + "/api/status", { userHeader: false });
-            qpd = (st && st.data && Number(st.data.quota_per_unit)) || AR_QPD_FALLBACK;
-        } catch (_) {}
-        if (!(qpd > 0)) qpd = AR_QPD_FALLBACK;
-        return "$" + (Number(u.quota) / qpd).toFixed(2);
+            response = await fetchTimed(path, { credentials: "include", cache: "no-store", signal: controller.signal, headers: headers || {} });
+            body = await response.json();
+        } catch (cause) {
+            const error = new Error(controller.signal.aborted ? "Agent 请求超时，请稍后重试" : "Agent 接口未返回有效数据，请确认页面验证和网络状态");
+            error.status = response ? response.status : 0;
+            throw error;
+        } finally { clearTimeout(timer); }
+        if (!response.ok || !body || body.success !== true) {
+            const error = new Error(String(body && body.message || "Agent HTTP " + response.status));
+            error.status = response.status;
+            error.auth = response.status === 401 || (response.ok && body && body.success === false && arSessionExpired(error.message));
+            throw error;
+        }
+        return body;
     }
-    async function arCheckin(say, manualTrigger) {
-        try { return await arOAuth(say, true); }
-        catch (e) {
-            const msg = (e && e.message) || String(e);
-
-            if (e && e.noOauth) throw e;
-            say("纯代码失败:" + msg);
-
-            if (!manualTrigger && !acquireTabLock()) throw new Error(msg + " / 另一个标签正在授权");
+    function arValidQuota(value) {
+        return (typeof value === "number" || (typeof value === "string" && value.trim() !== "")) && Number.isFinite(Number(value));
+    }
+    async function arPageSession(stored) {
+        const headers = stored && stored.id ? { "New-API-User": String(stored.id) } : {};
+        try {
+            const result = await arPageJson("/api/user/self", headers);
+            const user = result.data;
+            if (!user || !user.id || (stored && stored.id && String(user.id) !== String(stored.id))) throw new Error("Agent 会话账号尚未一致，请重新登录");
+            return user;
+        } catch (error) { if (error.auth) return null; throw error; }
+    }
+    async function arPageLogout(stored, stillCurrent) {
+        const headers = stored && stored.id ? { "New-API-User": String(stored.id) } : {};
+        try { await arPageJson("/api/user/logout", headers); }
+        catch (error) { if (!error.auth) throw error; }
+        if (!stillCurrent()) throw new Error("Agent 登录流程已取消");
+        // Only a successful server acknowledgment (or explicit expired session) clears the cache.
+        // Anonymous /self requests on this deployment can return an HTML interstitial.
+        // The newly authorized session is verified through /self before any success is recorded.
+        localStorage.removeItem("user");
+        gmDel(AR.UIDKEY); gmDel(AR.SIDEKEY);
+    }
+    function arFlowCurrent(id) {
+        const flow = gmGet(AR.FLOW, null);
+        return flow && flow.id === id && Date.now() - flow.ts < 3 * 60 * 1000 ? flow : null;
+    }
+    function arPageFlow(flow) {
+        if (!arFlowCurrent(flow.id)) return;
+        const current = function () { return !!arFlowCurrent(flow.id); };
+        function update(values) {
+            const latest = arFlowCurrent(flow.id);
+            if (!latest) return false;
+            gmSet(AR.FLOW, Object.assign({}, latest, values, { ts: Date.now() }));
+            return true;
+        }
+        function fail(error) { update({ step: "done", error: String(error && error.message || "Agent 登录未完成").slice(0,200) }); }
+        async function done(user, stored) {
+            if (!current()) return;
+            if (!arValidQuota(user.quota)) throw new Error("Agent 会话已登录，但余额数据不完整");
+            let perUnit = AR_QPD_FALLBACK;
             try {
-                const r = await arFallbackTab(say);
-
-                say("等待账号ID…");
-                await waitArUid(3000);
-                if (!r.user) {
-                    try { const s = await gmJsonRetry(AR.HOST + "/api/user/self", { userHeader: true }, 1); r.user = s && s.data; } catch (_) {}
+                const status = await arPageJson("/api/status");
+                const value = Number(status.data && status.data.quota_per_unit);
+                if (value > 0 && Number.isFinite(value)) perUnit = value;
+            } catch (_) {}
+            if (!current()) return;
+            setArUid(user.id);
+            update({ step: "done", checkedIn: !!(stored && stored.checked_in === true),
+                user: { id: user.id, quota: Number(user.quota), quota_per_unit: perUnit } });
+        }
+        if (flow.step === "start") {
+            update({ step: "checking" });
+            (async function () {
+                const stored = getStoredUser();
+                if (!flow.withLogout && stored) {
+                    const user = await arPageSession(stored);
+                    if (user) { await done(user, stored); return; }
                 }
-                return r;
-            } catch (e2) {
-                if (e2 && e2.noOauth) throw e2;
-                throw new Error(msg + " / 兜底:" + ((e2 && e2.message) || e2));
-            } finally {
-                if (!manualTrigger) releaseTabLock();
+                if (!current()) return;
+                update({ step: "logging_out" });
+                await arPageLogout(stored, current);
+                if (!current()) return;
+                const state = await arPageJson("/api/oauth/state?mode=login");
+                if (!state.data || typeof state.data !== "string") throw new Error("Agent 未返回新的登录 state");
+                if (!update({ step: "authorizing" })) return;
+                location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(state.data));
+            })().catch(fail);
+        } else if (flow.step === "authorizing") {
+            let busy = false, timer = null, expiredChecks = 0;
+            const started = Date.now();
+            async function check() {
+                if (!current() || Date.now() - started > AR.TAB_TIMEOUT) { clearInterval(timer); return; }
+                if (busy || location.pathname.indexOf("/console") !== 0) return;
+                const stored = getStoredUser();
+                if (!stored) return;
+                busy = true;
+                try {
+                    const user = await arPageSession(stored);
+                    if (user) { clearInterval(timer); await done(user, stored); }
+                    else if (++expiredChecks >= 3) { clearInterval(timer); fail(new Error("Agent 回调后的会话仍未生效，请稍后重新登录")); }
+                } catch (error) { clearInterval(timer); fail(error); }
+                finally { busy = false; }
             }
+            timer = setInterval(check, 1200);
+            check();
         }
     }
+    function arFallbackTab(say, withLogout) {
+        return new Promise(function (resolve, reject) {
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+            gmSet(AR.FLOW, { id: id, step: "start", ts: Date.now(), withLogout: !!withLogout });
+            markAutoLogin(AR.AUTOKEY);
+            let handle = null, timer = null;
+            function finish(error, value) {
+                clearInterval(timer);
+                if (arFlowCurrent(id)) gmDel(AR.FLOW);
+                try { if (handle) handle.close(); } catch (_) {}
+                if (error) reject(error); else resolve(value);
+            }
+            try { handle = GM_openInTab(AR.HOST + "/?ar_auto=1", { active: true, insert: true, setParent: true }); }
+            catch (_) { finish(new Error("无法打开 Agent 登录标签")); return; }
+            if (!handle) { finish(new Error("无法打开 Agent 登录标签")); return; }
+            say(withLogout ? "正在 Agent 页面退出并重新登录…" : "正在 Agent 页面确认登录状态…");
+            const started = Date.now();
+            timer = setInterval(function () {
+                const flow = arFlowCurrent(id);
+                if (flow && flow.step === "done") {
+                    if (flow.noOauth) { finish(noOauthError()); return; }
+                    if (flow.error) { finish(new Error(flow.error)); return; }
+                    if (!flow.user || !flow.user.id || !arValidQuota(flow.user.quota)) { finish(new Error("Agent 未确认有效会话，未记录为登录成功")); return; }
+                    finish(null, { checkedIn: flow.checkedIn === true, user: flow.user, source: "verified-tab" });
+                } else if (!flow) finish(new Error("Agent 登录流程已取消或被替换"));
+                else if (handle.closed) finish(new Error("Agent 授权标签已关闭，登录尚未确认"));
+                else if (Date.now() - started > AR.TAB_TIMEOUT) finish(new Error("Agent 登录确认超时，请完成网页验证后重试"));
+            }, 400);
+        });
+    }
+    const AR_QPD_FALLBACK = 500000;
+    async function arWithPage(say, withLogout) {
+        if (!acquireTabLock()) throw new Error("另一个标签正在授权，请等待完成后重试 Agent");
+        try { return await arFallbackTab(say || function () {}, withLogout); }
+        finally { releaseTabLock(); }
+    }
+    async function arBalance(userData) {
+        let user = userData;
+        if (!user || !arValidQuota(user.quota)) user = (await arWithPage(null, false)).user;
+        let perUnit = Number(user.quota_per_unit) || AR_QPD_FALLBACK;
+        if (!(perUnit > 0)) perUnit = AR_QPD_FALLBACK;
+        return "$" + (Number(user.quota) / perUnit).toFixed(2);
+    }
+    function arCheckin(say) { return arWithPage(say, true); }
+    // LDH_AGENT_SESSION_1110 END
 
     function anyGetFlow() {
         try {
@@ -662,7 +695,7 @@
                         .then(function (s) {
                             if (!s || !s.data || typeof s.data.quota === "undefined") return;
                             const bal = "$" + (Number(s.data.quota) / (qpd > 0 ? qpd : AR_QPD_FALLBACK)).toFixed(2);
-                            gmSet(AR.SIDEKEY, JSON.stringify({ bal: bal, at: Date.now() }));
+                            gmSet(AR.SIDEKEY, JSON.stringify({ bal: bal, uid: u.id, at: Date.now() }));
                         });
                 }).catch(function () {});
         }
@@ -670,37 +703,8 @@
         let flow = gmGet(AR.FLOW, null);
         if (flow && (!flow.ts || Date.now() - flow.ts > 3 * 60 * 1000)) { gmDel(AR.FLOW); flow = null; }
         if (flow) {
-            (async function () {
-                const stored = getStoredUser();
-                if (flow.step === "authorizing") {
-
-                    const finishIfReady = function () {
-                        const cur = getStoredUser();
-                        if (!cur || !cur.id) return false;
-                        setArUid(cur.id);
-                        gmSet(AR.FLOW, { step: "done", ts: Date.now(), checkedIn: cur.checked_in === true });
-                        return true;
-                    };
-                    if (!finishIfReady()) {
-                        const timer = setInterval(function () { if (finishIfReady()) clearInterval(timer); }, 250);
-                        setTimeout(function () { clearInterval(timer); }, 60000);
-                    }
-                    return;
-                }
-                if (flow.step === "start") {
-                    gmSet(AR.FLOW, { step: "authorizing", ts: Date.now() });
-                    try {
-                        const headers = stored && stored.id ? { "New-API-User": String(stored.id) } : {};
-                        await fetchTimed("/api/user/logout", { credentials: "include", cache: "no-store", headers: headers }).catch(function () {});
-                        localStorage.removeItem("user");
-                        const resp = await fetchTimed("/api/oauth/state?mode=login", { credentials: "include", cache: "no-store" });
-                        const txt = await resp.text();
-                        let b; try { b = JSON.parse(txt); } catch (_) { throw new Error("页面流程返回非JSON(HTTP " + resp.status + ")"); }
-                        if (!resp.ok || b.success === false || !b.data) throw new Error(b.message || ("HTTP " + resp.status));
-                        location.replace(CONNECT_HOST + "/oauth2/authorize?response_type=code&client_id=" + AR.CLIENT_ID + "&state=" + encodeURIComponent(b.data));
-                    } catch (e) { gmSet(AR.FLOW, { step: "done", ts: Date.now(), error: (e && e.message) || String(e) }); }
-                }
-            })();
+            if (flow.id) arPageFlow(flow);
+            else gmDel(AR.FLOW);
         } else if (isEntryPath()) {
 
             (async function () {
@@ -1602,7 +1606,7 @@
                 if (!getNoOauth(who)) saveNoOauth(who, "connect-page");
                 const arFlow = gmGet(AR.FLOW, null);
                 if (cid === AR.CLIENT_ID && arFlow && arFlow.step === "authorizing" && Date.now() - arFlow.ts < 180000) {
-                    gmSet(AR.FLOW, { step: "done", ts: Date.now(), noOauth: true, error: NO_OAUTH_MSG });
+                    gmSet(AR.FLOW, Object.assign({}, arFlow, { step: "done", ts: Date.now(), noOauth: true, error: NO_OAUTH_MSG }));
                 }
                 return true;
             };
@@ -1677,13 +1681,26 @@
 
     let running = false, abort = false, activeMode = "", startedAt = 0, csrf = "", consecCf = 0, uiTimer = null;
     let engineController = null, consecutiveErrors = 0, stopReason = "";
+    function forumRateNotice(response, url, method, body) {
+        let path = "";
+        try { path = new URL(url, location.origin).pathname; } catch (_) {}
+        const label = /^\/t\//.test(path) ? "主题读取" : /^\/user_actions/.test(path) ? "用户动态读取" : /^\/posts\//.test(path) ? "回复读取" : /^\/(top|latest)\./.test(path) ? "主题列表读取" : path === "/topics/timings" ? "阅读记录提交" : "论坛读取";
+        const waitMs = retryDelay(response.headers.get("Retry-After") || "", body);
+        let errorType = "";
+        try { errorType = String(JSON.parse(body).error_type || "").slice(0,80); } catch (_) {}
+        const detail = { at: Date.now(), status: 429, method: method, path: path.replace(/\/\d+(?=\.|\/|$)/g,"/:id"), kind: label, waitMs: waitMs, errorType: errorType };
+        try { localStorage.setItem("ldh_last_rate_limit", JSON.stringify(detail)); } catch (_) {}
+        const wait = waitMs > 0 ? "服务器要求等待约 " + Math.ceil(waitMs / 1000) + " 秒后再试。" : "服务器未提供等待时间，请稍后再试。";
+        return label + "被限流（HTTP 429），已停止。" + wait;
+    }
+
     async function engineFetch(url, options) {
         if (abort || (activeMode && elapsed() >= totalMs(MODES[activeMode]))) return Promise.reject(new DOMException("已停止", "AbortError"));
         const opts = Object.assign({}, options || {}, { signal: engineController ? engineController.signal : undefined });
         const response = await fetchTimed(url, opts);
-        if ((opts.method || "GET") === "GET" && [401, 403, 429].indexOf(response.status) >= 0) {
+        if ((opts.method || "GET").toUpperCase() === "GET" && [401, 403, 429].indexOf(response.status) >= 0) {
             const body = await response.clone().text();
-            stopEngine(response.status === 429 ? "读取接口被限流，已停止，请稍后再试。" :
+            stopEngine(response.status === 429 ? forumRateNotice(response, url, "GET", body) :
                 CF_CHALLENGE_RE.test(body) ? "遇到验证页面，已停止，请先在网页完成验证。" : "登录已失效或没有访问权限，已停止。");
         }
         return response;
@@ -2417,7 +2434,7 @@
 
         try {
             const v = JSON.parse(gmGet(AR.SIDEKEY, "null"));
-            if (!v || !v.bal) return;
+            if (!v || !v.bal || (v.uid && arUid() && Number(v.uid) !== arUid())) return;
             if (Date.now() - Number(v.at || 0) > 30 * 60 * 1000) return;
             if (v.bal === arBal) return;
             arBal = v.bal;
@@ -2445,6 +2462,7 @@
         return v.length ? ' <span style="color:#ff8a8a;">⚠' + v.join(" ") + "</span>" : "";
     }
     function rowsForPanel() {
+        if (!me.username) return ["", ""];
 
         if (isLowTL()) {
             if (summary) {
@@ -2553,6 +2571,7 @@
     }
     function render() {
         const r1 = document.getElementById("ldh_r1"); if (!r1) return;
+        ["ldh_r2", "ldh_r3", "ldh_r4"].forEach(function (id) { const row = document.getElementById(id); if (row) row.hidden = !me.username; });
         const M = MODES[activeMode];
         const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), totalMs(M))) : frozenTimer;
 
@@ -2589,7 +2608,7 @@
         const r4 = document.getElementById("ldh_r4");
         r4.title = endNote || "";
         const notice = document.getElementById("ldh_notice");
-        if (notice) { notice.textContent = endNote; notice.hidden = !endNote; }
+        if (notice) { notice.textContent = endNote; notice.hidden = !me.username || !endNote; }
         if (running || finishedOnce) {
 
             const showNote = !running && endNote && START_FAIL.indexOf(endNote) >= 0;
