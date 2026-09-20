@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.8
+// @version      1.1.9
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -49,7 +49,7 @@
         DAILY_LIKES:   [1, 1],
 
         FAST_MINUTES:  10,
-        FAST_TOPICS:   [50, 100],
+        FAST_TOPICS:   [180, 250],
         FAST_REPLIES:  [2000, 3000],
         FAST_LIKES:    [1, 1],
 
@@ -784,7 +784,7 @@
     }
 
 
-    // LDH_ANY_TOKEN_118_20260916 BEGIN
+    // LDH_ANY_TOKEN_119_20260920 BEGIN
     function anyTokenAmountBody(text, perUnit) {
         const value = String(text || "").trim();
         if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value) || value.length > 30) throw new Error("请输入大于 0 的数字额度");
@@ -809,10 +809,37 @@
         });
     }
 
+    function anyTokenBalance(quota, rows, perUnit) {
+        function units(value) {
+            if ((typeof value !== "number" && typeof value !== "string") || String(value).trim() === "" || !Number.isSafeInteger(Number(value))) {
+                throw new Error("余额数据不完整，请刷新余额重试");
+            }
+            return Number(value);
+        }
+        if (!Number.isSafeInteger(perUnit) || perUnit <= 0 || !Array.isArray(rows)) throw new Error("无法读取余额换算比例或令牌列表");
+        const current = units(quota);
+        let allocated = 0, included = 0;
+        rows.forEach(function (row) {
+            if (!row || typeof row !== "object") throw new Error("令牌余额数据不完整");
+            if (row.unlimited_quota === true || row.unlimited_quota === 1 || row.unlimited_quota === "true" || row.unlimited_quota === "1") return;
+            const remaining = units(row.remain_quota);
+            if (remaining <= 0) return;
+            allocated += remaining; included++;
+            if (!Number.isSafeInteger(allocated)) throw new Error("令牌额度合计超出精确计算范围");
+        });
+        const available = current - allocated;
+        if (!Number.isSafeInteger(available)) throw new Error("实际可用余额超出精确计算范围");
+        return { current: current, allocated: allocated, available: available, perUnit: perUnit, included: included, total: rows.length };
+    }
+
+    function anyTokenMoney(units, perUnit) {
+        return "$" + (units / perUnit).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: Math.max(6, Math.min(12, Math.ceil(Math.log10(perUnit)))) });
+    }
+
     function anyInitTokenTools() {
         const pageWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
-        if (pageWindow.__ldhAnyToken118) return;
-        pageWindow.__ldhAnyToken118 = true;
+        if (pageWindow.__ldhAnyToken119) return;
+        pageWindow.__ldhAnyToken119 = true;
         const ENDPOINT = "https://any.909724.xyz/api/import-token";
         const REMOVE_ENDPOINT = "https://any.909724.xyz/api/remove-token";
         const KEY = "ldh_any_import_key";
@@ -823,6 +850,7 @@
         const rawFetch = pageWindow.fetch.bind(pageWindow);
         let box = null, busy = false, pumping = false, removing = false, reconciling = false, lastAccount = "", mountScheduled = false;
         let message = "新建令牌成功后会自动导入查询网站", tone = "info";
+        let balance = { account: "", value: null, at: 0, error: "" }, balanceJob = null, balanceDirty = true, balanceTimer = null;
         function account() { const u = getStoredUser(); return u && u.id ? String(u.id) : ""; }
         function onTokenPage() { return /^\/console\/token\/?$/.test(location.pathname); }
         function read(store, key, fallback) { try { return JSON.parse(store.getItem(key) || "null") || fallback; } catch (_) { return fallback; } }
@@ -854,6 +882,53 @@
             box.querySelector('[data-part="create"]').disabled = busy || journals(account()).length > 0;
             box.querySelector('[data-part="retry"]').hidden = !count;
             box.querySelector('[data-part="retry"]').disabled = pumping || removing || reconciling;
+            paintBalance();
+        }
+        function paintBalance() {
+            if (!box || !box.isConnected) return;
+            const main = box.querySelector('[data-part="available"]'), detail = box.querySelector('[data-part="balance-detail"]');
+            if (!main || !detail) return;
+            const sameAccount = balance.account === account(), value = sameAccount && balance.value;
+            const title = value ? "实际可用余额：" + anyTokenMoney(value.available, value.perUnit) : sameAccount && balance.error ? "实际可用余额：暂时无法读取" : "实际可用余额：读取中…";
+            const text = value ? "当前余额 " + anyTokenMoney(value.current, value.perUnit) + " − 已有令牌剩余额度 " + anyTokenMoney(value.allocated, value.perUnit) + "（负数和无限额度不计入）" : sameAccount && balance.error ? balance.error : "正在读取账户余额及全部令牌";
+            if (main.textContent !== title) main.textContent = title;
+            if (detail.textContent !== text) detail.textContent = text;
+            main.style.color = value && value.available < 0 ? "var(--semi-color-danger,#c93535)" : "var(--semi-color-text-0,#1f2937)";
+            box.querySelector('[data-part="refresh-balance"]').disabled = !!balanceJob;
+        }
+        async function refreshBalance(force) {
+            const who = account();
+            if (!who || !onTokenPage()) return null;
+            if (balanceJob) { if (force) balanceDirty = true; return balanceJob; }
+            if (!force && !balanceDirty && balance.account === who && Date.now() - balance.at < 30000) return balance.value;
+            balanceDirty = false;
+            balance = { account: who, value: null, at: Date.now(), error: "" };
+            balanceJob = (async function () {
+                try {
+                    let perUnit = Number(read(localStorage, "status", {}).quota_per_unit);
+                    if (!Number.isSafeInteger(perUnit) || perUnit <= 0) perUnit = Number((await api("/api/status", who)).quota_per_unit);
+                    const values = await Promise.all([api("/api/user/self", who), listTokens(who)]);
+                    if (account() !== who) return null;
+                    const value = anyTokenBalance(values[0] && values[0].quota, values[1], perUnit);
+                    balance = { account: who, value: value, at: Date.now(), error: "" };
+                    return value;
+                } catch (_) {
+                    if (account() === who) balance = { account: who, value: null, at: Date.now(), error: "请点“刷新余额”重试；未读取完整数据时不估算可用余额。" };
+                    return null;
+                } finally {
+                    balanceJob = null;
+                    paintBalance();
+                    if (balanceDirty) queueBalanceRefresh();
+                }
+            })();
+            paintBalance();
+            return balanceJob;
+        }
+        function queueBalanceRefresh() {
+            balanceDirty = true;
+            if (!box || !box.isConnected || !onTokenPage()) return;
+            if (balanceTimer) clearTimeout(balanceTimer);
+            balanceTimer = setTimeout(function () { balanceTimer = null; refreshBalance(true); }, 200);
         }
         function isCreate(method, url) {
             try { const u = new URL(url, location.href); return String(method || "GET").toUpperCase() === "POST" && u.origin === location.origin && /^\/api\/token\/?$/.test(u.pathname); }
@@ -864,6 +939,12 @@
                 const u = new URL(url, location.href), match = u.pathname.match(/^\/api\/token\/([1-9]\d*)\/?$/);
                 return String(method || "GET").toUpperCase() === "DELETE" && u.origin === location.origin && match ? match[1] : "";
             } catch (_) { return ""; }
+        }
+        function balanceMutation(method, url) {
+            try {
+                const u = new URL(url, location.href);
+                return /^(POST|PUT|PATCH|DELETE)$/.test(String(method || "GET").toUpperCase()) && u.origin === location.origin && /^\/api\/token(?:\/[1-9]\d*)?\/?$/.test(u.pathname);
+            } catch (_) { return false; }
         }
         function fullToken(row) {
             const key = row && row.key;
@@ -897,7 +978,10 @@
                 const value = await api("/api/token/?p=" + p + "&size=100", who);
                 const data = Array.isArray(value) ? value : value && value.items;
                 if (!Array.isArray(data)) throw new Error("令牌列表格式变化，请稍后重试同步");
-                if (!data.length) return rows;
+                if (!data.length) {
+                    if (value.total && rows.length < Number(value.total)) throw new Error("令牌列表尚未读取完整，请刷新余额重试");
+                    return rows;
+                }
                 const fresh = data.filter(function (item) { return item.id != null && !seen.has(String(item.id)); });
                 if (!fresh.length) throw new Error("令牌分页读取异常，请刷新后重试");
                 fresh.forEach(function (item) { seen.add(String(item.id)); rows.push(item); });
@@ -943,6 +1027,7 @@
             return true;
         }
         async function finish(op, response) {
+            queueBalanceRefresh();
             if (!op) return;
             if (response && response.success === false) { forget(op); say("AnyRouter 未创建成功，请检查原页面的提示", "error"); return; }
             op.value.state = response && response.success === true ? "confirmed" : "uncertain";
@@ -1010,6 +1095,7 @@
             localStorage.setItem(op.key, JSON.stringify(op.value)); paint();
         }
         async function finishDelete(op, response) {
+            queueBalanceRefresh();
             if (!op) return;
             if (response && response.success === false) { forgetDelete(op); say("AnyRouter 删除未成功，网站白名单已保留", "error"); return; }
             op.value.state = response && response.success === true ? "verify" : "uncertain";
@@ -1151,7 +1237,7 @@
                 xhr.open = function (method, url, async) {
                     const previous = requests.get(this); if (previous) previous.cancelled = true;
                     const result = originalOpen.apply(this, arguments);
-                    requests.set(this, { create: async !== false && isCreate(method, url), deleteId: async !== false ? deleteId(method, url) : "", cancelled: false });
+                    requests.set(this, { create: async !== false && isCreate(method, url), deleteId: async !== false ? deleteId(method, url) : "", balance: balanceMutation(method, url), cancelled: false });
                     return result;
                 };
                 xhr.abort = function () {
@@ -1160,6 +1246,7 @@
                 };
                 xhr.send = function (body) {
                     const record = requests.get(this), spec = bodySpec(body), self = this, args = arguments;
+                    if (record && record.balance) self.addEventListener("loadend", queueBalanceRefresh, { once: true });
                     if (!record || !(record.deleteId || record.create && spec) || !account()) return originalSend.apply(this, args);
                     (async function () {
                         const done = record.deleteId ? finishDelete : finish;
@@ -1182,7 +1269,11 @@
                 const method = options && options.method || input && input.method || "GET";
                 const url = typeof input === "string" || input instanceof URL ? String(input) : input && input.url;
                 const deletingId = deleteId(method, url);
-                if (!(isCreate(method, url) || deletingId) || !account()) return rawFetch(input, options);
+                if (!(isCreate(method, url) || deletingId) || !account()) {
+                    const request = rawFetch(input, options);
+                    if (account() && balanceMutation(method, url)) return request.then(function (response) { queueBalanceRefresh(); return response; });
+                    return request;
+                }
                 return (async function () {
                     let spec = bodySpec(options && options.body), op = null;
                     const done = deletingId ? finishDelete : finish;
@@ -1205,6 +1296,7 @@
             const who = account();
             if (who !== lastAccount) {
                 lastAccount = who;
+                balance = { account: who, value: null, at: 0, error: "" }; balanceDirty = true;
                 const saved = read(sessionStorage, NOTICE + who, null);
                 if (saved && Date.now() - saved.at < 180000) { message = saved.text; tone = saved.tone; }
                 else { message = "新建令牌成功后会自动导入查询网站"; tone = "info"; }
@@ -1216,15 +1308,21 @@
             box = document.createElement("section"); box.id = "ldh-any-token-tools";
             box.style.cssText = "box-sizing:border-box;width:100%;min-width:0;margin:0 0 12px;padding:14px;border:1px solid var(--semi-color-border,#dbe1ea);border-radius:12px;background:var(--semi-color-bg-1,#fff);color:var(--semi-color-text-0,#1f2937);font-size:13px;";
             box.innerHTML = '<form style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0"><label for="ldh-any-token-amount" style="font-weight:600">快速创建令牌 · 额度（美元）</label><input id="ldh-any-token-amount" inputmode="decimal" type="text" autocomplete="off" placeholder="例如 100" aria-label="令牌额度（美元）" style="box-sizing:border-box;width:145px;max-width:100%;padding:7px 9px;border:1px solid var(--semi-color-border,#ccd3df);border-radius:6px;background:var(--semi-color-bg-2,#fff);color:inherit"><button type="submit" data-part="create" style="padding:7px 12px;border:0;border-radius:6px;background:#3370ff;color:white;cursor:pointer">创建并导入</button><button type="button" data-part="retry" hidden style="padding:6px 10px;border:1px solid #b4bdcc;border-radius:6px;background:transparent;color:inherit;cursor:pointer">重试同步</button><a href="https://any.909724.xyz/" target="_blank" rel="noopener noreferrer" style="color:#3370ff">查询网站</a></form><div style="margin-top:7px;font-size:12px;opacity:.8">名称使用输入的数字；有效期、分组、模型和 IP 限制沿用新建默认值。快速创建后自动复制。原有“添加令牌”也会自动导入；删除成功后同步移除网站白名单。</div><div role="status" aria-live="polite" data-part="status" style="margin-top:7px;overflow-wrap:anywhere"></div>';
+            const funds = document.createElement("div");
+            funds.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;overflow-wrap:anywhere";
+            funds.innerHTML = '<strong data-part="available" role="status" aria-live="polite">实际可用余额：读取中…</strong><button type="button" data-part="refresh-balance" style="padding:3px 8px;border:1px solid var(--semi-color-border,#ccd3df);border-radius:5px;background:transparent;color:inherit;cursor:pointer;font-size:12px">刷新余额</button><span data-part="balance-detail" style="flex-basis:100%;font-size:12px;opacity:.8">正在读取账户余额及全部令牌</span>';
+            box.querySelector("form").after(funds);
             const style = document.createElement("style");
             style.textContent = '#ldh-any-token-tools input,#ldh-any-token-tools button{scroll-margin-top:76px}#ldh-any-token-tools button:disabled{opacity:.55;cursor:not-allowed!important}@media(max-width:700px){#ldh-any-token-tools label{flex-basis:100%}}';
             box.prepend(style);
             box.querySelector("form").addEventListener("submit", function (event) { event.preventDefault(); quickCreate(); });
             box.querySelector('[data-part="retry"]').addEventListener("click", function () { retry(true); });
+            box.querySelector('[data-part="refresh-balance"]').addEventListener("click", function () { refreshBalance(true); });
             main.prepend(box); paint();
+            refreshBalance(true);
         }
         function scheduleMount() { if (!mountScheduled) { mountScheduled = true; setTimeout(mount, 120); } }
-        // Network observation is restricted to token creation/deletion; existing login helpers stay unchanged.
+        // Network observation is restricted to token mutations; existing login helpers stay unchanged.
         observeRequests();
         try { GM_registerMenuCommand("设置查询网站同步密钥", function () {
             const value = prompt("输入查询网站的专用同步密钥（留空不修改）", "");
@@ -1234,10 +1332,12 @@
         observer.observe(document.documentElement, { childList: true, subtree: true });
         window.addEventListener("popstate", scheduleMount);
         window.addEventListener("online", function () { if (onTokenPage()) retry(false); });
-        setInterval(function () { mount(); if (onTokenPage() && !busy && !reconciling) { pump(false); pumpDeletes(false); } }, 2000);
+        window.addEventListener("focus", function () { if (onTokenPage()) refreshBalance(false); });
+        document.addEventListener("visibilitychange", function () { if (document.visibilityState !== "hidden" && onTokenPage()) refreshBalance(false); });
+        setInterval(function () { mount(); if (onTokenPage() && !busy && !reconciling) { pump(false); pumpDeletes(false); if (document.visibilityState !== "hidden") refreshBalance(false); } }, 2000);
         mount();
     }
-    // LDH_ANY_TOKEN_118_20260916 END
+    // LDH_ANY_TOKEN_119_20260920 END
 
 
     // LDH_ANY_ENTRY_20260915: direct login and bounded authorization attempts.
@@ -1562,17 +1662,15 @@
         TOPIC_OVERHEAD_MS: 2300,
         ENTER_MIN: 700, ENTER_MAX: 1200,
         HARD_BLOCK_RETRY_THRESHOLD: 600, CF_BACKOFF_MS: 10000, MAX_CONSEC_CF: 5,
-        LIKE_REACTION: "heart",
-        REQLOG_KEY: "ld_helper_reqlog", WINDOW_MS: 60 * 60 * 1000,
-        WARN_REQ: 130, REFUSE_START: 165, HARD_STOP: 185, SAFE_RESUME: 120
+        LIKE_REACTION: "heart"
     };
     const GAP_MIN_MS = clamp(Math.round(Number(CFG.REQ_GAP_SEC[0]) * 1000) || COMMON.FLOOR_INTERVAL, COMMON.FLOOR_INTERVAL, 99000);
     const GAP_MAX_MS = clamp(Math.round(Number(CFG.REQ_GAP_SEC[1]) * 1000) || GAP_MIN_MS, GAP_MIN_MS, 99000);
 
     const MODES = {
-        daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 5, safety: 160,      noLimit: false },
-        fast:  { key: "fast",  name: "快速升级", color: "#33507a", minutes: CFG.FAST_MINUTES,  topics: CFG.FAST_TOPICS,  replies: CFG.FAST_REPLIES,  likes: CFG.FAST_LIKES,  minPosts: 5, safety: 175,      noLimit: false },
-        idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a", minutes: CFG.IDLE_MINUTES,  topics: CFG.IDLE_TOPICS,  replies: CFG.IDLE_REPLIES,  likes: CFG.IDLE_LIKES,  minPosts: 8,  safety: Infinity, noLimit: true,  fullRandom: true  }
+        daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 5 },
+        fast:  { key: "fast",  name: "快速升级", color: "#33507a", minutes: CFG.FAST_MINUTES,  topics: CFG.FAST_TOPICS,  replies: CFG.FAST_REPLIES,  likes: CFG.FAST_LIKES,  minPosts: 5 },
+        idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a", minutes: CFG.IDLE_MINUTES,  topics: CFG.IDLE_TOPICS,  replies: CFG.IDLE_REPLIES,  likes: CFG.IDLE_LIKES,  minPosts: 8, fullRandom: true  }
     };
     const MODE_KEYS = ["daily", "fast", "idle"];
     function totalMs(M) { return M.minutes * 60 * 1000; }
@@ -1596,7 +1694,7 @@
         if (engineController) engineController.abort();
         wakeAll();
     }
-    let finishedOnce = false, frozenTimer = "", banMsg = "", endNote = "";
+    let finishedOnce = false, frozenTimer = "", endNote = "";
     let syncState = "idle", syncAt = 0;
     let arState = "idle", arText = "", arBal = "";
     let anyState = "idle";
@@ -1906,33 +2004,12 @@
         });
     }
 
-    function recentTimings() {
-        const entries = readJson(COMMON.REQLOG_KEY, []), now = Date.now();
-        return Array.isArray(entries) ? entries.filter(function (t) { return Number.isFinite(t) && t <= now && now - t < COMMON.WINDOW_MS; }) : [];
-    }
-    function logTimingReq() { const a = recentTimings(); a.push(Date.now()); writeJson(COMMON.REQLOG_KEY, a); }
-    function recentTimingCount() { return recentTimings().length; }
-    function budgetHit() {
-        const M = MODES[activeMode];
-        if (!M || M.noLimit) return false;
-        return recentTimingCount() >= COMMON.HARD_STOP || sent.timingReq >= M.safety;
-    }
-    function minutesUntilBelow(target) {
-        const now = Date.now(); const arr = recentTimings().sort(function (a, b) { return a - b; });
-        if (arr.length <= target) return 0;
-        return Math.max(1, Math.ceil((arr[arr.length - target - 1] + COMMON.WINDOW_MS - now) / 60000));
-    }
-
     function schedule(T) {
         const M = MODES[activeMode];
         const remTime = Math.max(0, T - elapsed());
         const remReplies = Math.max(0, plan.replies - sent.replies);
         const remTopics = Math.max(0, plan.topics - sent.topics);
-        let minReq = Math.max(Math.ceil(remTime / GAP_MAX_MS), remTopics, 1);
-        if (M && !M.fullRandom) {
-            const left = Math.max(1, M.safety - 5 - sent.timingReq);
-            minReq = Math.max(1, Math.min(minReq, left));
-        }
+        const minReq = Math.max(Math.ceil(remTime / GAP_MAX_MS), remTopics, 1);
         const avg = remTime / minReq;
         let interval, cap, estReq, batchOverride = null;
         if (M && M.fullRandom) {
@@ -1940,17 +2017,15 @@
             interval = randInt(GAP_MIN_MS, cap);
             estReq = Math.max(1, Math.round(remTime / Math.max(1, cap / 2)));
         } else {
-            const room = Math.max(1, M.safety - 5);
             const rr = Math.max(0, plan.replies - sent.replies);
             const rt = Math.max(0, plan.topics - sent.topics);
             const reqForPosts = rr > 0 ? Math.ceil(rr / COMMON.MAX_BATCH) : 0;
             const needReq = Math.max(rt, reqForPosts, 1);
-            const budgetReq = Math.max(1, Math.min(needReq, room - sent.timingReq));
-            batchOverride = rr > 0 ? Math.ceil(rr / budgetReq) : 1;
+            batchOverride = rr > 0 ? Math.ceil(rr / needReq) : 1;
             batchOverride = clamp(batchOverride, 1, COMMON.MAX_BATCH);
             const overhead = rt * COMMON.TOPIC_OVERHEAD_MS;
             const usable = Math.max(0, remTime - overhead);
-            const avgGap = usable / budgetReq;
+            const avgGap = usable / needReq;
             const lo = clamp(Math.round(avgGap * 0.4), GAP_MIN_MS, GAP_MAX_MS);
             const hi = clamp(Math.round(avgGap * 1.6), lo, GAP_MAX_MS);
             interval = randInt(lo, hi);
@@ -2173,7 +2248,6 @@
         pool.reset();
 
         while (!abort && elapsed() < T) {
-            if (budgetHit()) { endNote = "本窗口达上限"; break; }
             await maybeLike();
             if (abort || elapsed() >= T) break;
 
@@ -2203,7 +2277,6 @@
 
             let readThis = false, p = 0;
             while (p < nums.length && !abort && elapsed() < T) {
-                if (budgetHit()) { endNote = "本窗口达上限"; break; }
                 await maybeLike();
                 if (abort || elapsed() >= T) break;
 
@@ -2212,7 +2285,6 @@
                 const batch = nums.slice(p, p + take);
                 if (!batch.length) break;
                 sent.timingReq++;
-                logTimingReq();
                 const res = await postTimings(tid, batch);
                 if (abort) break;
                 if (res.kind === "ok") {
@@ -2257,11 +2329,7 @@
         if (running) { if (mode === activeMode) stopEngine(); return; }
         const M = MODES[mode];
         if (!M) return;
-        if (!M.noLimit) {
-            const rc = recentTimingCount();
-            if (rc >= COMMON.REFUSE_START) { banMsg = "⛔ 本窗口已发" + rc + "次，约" + minutesUntilBelow(COMMON.SAFE_RESUME) + "分钟后再来"; finishedOnce = false; render(); return; }
-        }
-        banMsg = ""; endNote = ""; frozenTimer = ""; running = true; abort = false; activeMode = mode; startedAt = Date.now(); consecCf = 0;
+        endNote = ""; frozenTimer = ""; running = true; abort = false; activeMode = mode; startedAt = Date.now(); consecCf = 0;
         engineController = new AbortController(); consecutiveErrors = 0; stopReason = "";
         sent.topics = 0; sent.replies = 0; sent.likes = 0; sent.timingReq = 0; handledLikeTopics.clear();
         plan.topics = 0; plan.replies = 0; plan.likes = 0;
@@ -2527,8 +2595,6 @@
             const showNote = !running && endNote && START_FAIL.indexOf(endNote) >= 0;
             const note = showNote ? ' <span style="color:#ff8a8a;">·' + esc(endNote) + "</span>" : "";
             r4.innerHTML = progressText() + note;
-        } else if (banMsg) {
-            r4.innerHTML = '<span style="color:#ff8a8a;">' + esc(banMsg) + "</span>";
         } else {
 
             r4.innerHTML = errorLine();
@@ -3453,13 +3519,13 @@
             panel.id = "ldh_login_panel";
 
             panel.style.cssText = "all:initial;position:fixed!important;left:8px!important;bottom:8px!important;" +
-                "z-index:2147483647!important;display:block!important;width:320px!important;" +
+                "z-index:2147483647!important;display:block!important;width:320px!important;transform:scale(0.5)!important;transform-origin:left bottom!important;" +
                 "max-width:calc(100vw - 16px)!important;margin:0!important;padding:0!important;";
             root = panel.attachShadow({ mode: "open" });
             root.innerHTML = '<style>' +
                 ':host{color-scheme:dark}*{box-sizing:border-box}[hidden]{display:none!important}' +
                 'section{font:13px/1.5 system-ui,sans-serif;color:#fff;background:#202923;border:1px solid #51705b;' +
-                'border-radius:10px;box-shadow:0 4px 18px #0005;max-height:calc(100vh - 16px);max-height:calc(100dvh - 16px);overflow:auto;overflow-wrap:anywhere}' +
+                'border-radius:10px;box-shadow:0 4px 18px #0005;max-height:calc(200vh - 32px);max-height:calc(200dvh - 32px);overflow:auto;overflow-wrap:anywhere}' +
                 'header{position:sticky;top:0;z-index:1;background:#202923;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px}' +
                 'strong{font-size:13px;min-width:0}button,input{font:inherit;border-radius:6px;min-width:0}' +
                 'button{background:#347b48;color:#fff;border:1px solid #6b9977;padding:6px 10px;cursor:pointer}' +
