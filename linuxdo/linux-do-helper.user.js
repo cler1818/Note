@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.1.10
+// @version      1.3.0
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -32,6 +32,22 @@
 
 (function () {
     "use strict";
+    // ===== 三个按钮的运行参数：点击直接开始，只需修改这里 =====
+    // minutes：运行分钟数；likes：[最少次数, 最多次数]，每次启动抽取一次整数上限。
+    // likes 抽到 0 时不读取点赞名单、不发点赞请求；[0, 0] 表示始终不点赞。
+    // 两个 IntervalSec 均为 [最小秒数, 最大秒数]，每次提交后独立抽取下一间隔。
+    // 跨主题同时满足主题和回复间隔；读取请求、排队和网络耗时可能使实际间隔更长。
+    // repliesPerSubmit：每个首次阅读主题独立抽取整数上限（包含区间两端）。
+    // 未读帖子不足时按实际数量提交；含首帖，不是发布回复。
+    const MODE_SETTINGS = {
+        daily: { minutes: 3,   topicIntervalSec: [8, 15], replyIntervalSec: [8, 15], repliesPerSubmit: [40, 60], likes: [0, 1] }, // 日常维护
+        fast:  { minutes: 10,  topicIntervalSec: [8, 15], replyIntervalSec: [8, 15], repliesPerSubmit: [15, 35], likes: [0, 1] }, // 快速升级
+        idle:  { minutes: 500, topicIntervalSec: [20, 80], replyIntervalSec: [20, 80], repliesPerSubmit: [15, 35], likes: [0, 0] } // 日常挂机
+    };
+    // 所有论坛请求（含登录、主题详情、点赞）的最小间隔；避免只限制上传、读取却过密。
+    const REQUEST_INTERVAL_SEC = 3;
+    // ===== 参数区结束 =====
+
     const HC = { origin: "https://newassets.hcaptcha.com", message: "ldh-hcaptcha-v1" };
     if (location.origin === HC.origin) { hcaptchaFrame(); return; }
     if (window.top !== window.self) return;
@@ -39,27 +55,6 @@
     // 私库账号源：登录取整行账号密码，点赞只取用户名。
     const ACCOUNTS_API = "https://api.github.com/repos/cler1818/Personal-Backup/contents/linuxdo/username.txt?ref=main";
     const GITHUB_TOKEN_KEY = "ldh_github_token";
-
-    // 运行时间单位为分钟；数量数组是含首尾的随机区间。
-    const CFG = {
-
-        DAILY_MINUTES: 3,
-        DAILY_TOPICS:  [10, 25],
-        DAILY_REPLIES: [200, 250],
-        DAILY_LIKES:   [1, 1],
-
-        FAST_MINUTES:  10,
-        FAST_TOPICS:   [180, 250],
-        FAST_REPLIES:  [2000, 3000],
-        FAST_LIKES:    [1, 1],
-
-        IDLE_MINUTES:  500,
-        IDLE_TOPICS:   [200, 500],
-        IDLE_REPLIES:  [2000, 5000],
-        IDLE_LIKES:    [0, 0],
-
-        REQ_GAP_SEC:   [0, 60]         // 秒；运行时限定为 0.8～99 秒
-    };
 
     // 面板尺寸（像素）。
     const UI = {
@@ -96,7 +91,172 @@
     function gmSet(k, v) { try { GM_setValue(k, v); } catch (_) {} }
     function gmDel(k) { try { GM_deleteValue(k); } catch (_) {} }
 
+    // 所有脚本发出的论坛请求共用节流；不调整指纹、代理或绕过验证。
+    const FORUM_PACE = { gapMs: REQUEST_INTERVAL_SEC * 1000, cooldownMs: 30 * 60 * 1000,
+        nextKey: "ldh_forum_next_request", holdKey: "ldh_forum_cooldown", challengeKey: "ldh_forum_challenge", lock: "ldh-forum-request" };
+    let forumQueue = Promise.resolve();
+    function forumRecord(key) {
+        try { const v = JSON.parse(localStorage.getItem(key) || "{}"); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; }
+        catch (_) { return {}; }
+    }
+    function forumChallenge() {
+        let pending = forumRecord(FORUM_PACE.challengeKey);
+        const old = forumRecord(FORUM_PACE.holdKey), legacy = forumRecord("ldh_last_rate_limit");
+        // 旧版会把 CF（包括 HTTP 429 的验证页）误记为半小时限流。
+        // 只迁移有明确 challenge 标记的记录；独立的真实限流记录保留。
+        if (old.challenge === true) {
+            const sameEvent = Number(old.at) > 0 && Number(legacy.at) > 0 &&
+                Number(legacy.at) >= Number(old.at) && Number(legacy.at) - Number(old.at) <= 5000 && !legacy.errorType;
+            const statedWait = sameEvent ? Math.max(0, Number(legacy.waitMs) || 0) : 0;
+            const longWait = Number(old.until) > Number(old.at) + FORUM_PACE.cooldownMs ? Number(old.until) : 0;
+            pending = { at: Math.max(Number(old.at) || 0, Number(pending.at) || 0),
+                retryUntil: Math.max(Number(pending.retryUntil) || 0, Number(old.retryUntil) || 0,
+                    statedWait ? Number(legacy.at) + statedWait : 0, longWait), migrated: true };
+            localStorage.setItem(FORUM_PACE.challengeKey, JSON.stringify(pending));
+            localStorage.removeItem(FORUM_PACE.holdKey);
+            if (sameEvent) localStorage.removeItem("ldh_last_rate_limit");
+        }
+        return Number(pending.at) > 0 ? pending : null;
+    }
+    function forumHold() {
+        const challenge = forumChallenge(), hold = forumRecord(FORUM_PACE.holdKey), legacy = forumRecord("ldh_last_rate_limit");
+        const until = Math.max(Number(hold.until) || 0, Number(challenge && challenge.retryUntil) || 0,
+            legacy.status === 429 ? (Number(legacy.at) || 0) + Math.max(Number(legacy.waitMs) || 0, FORUM_PACE.cooldownMs) : 0);
+        return { until: until, remaining: Math.max(0, until - Date.now()) };
+    }
+    function forumHoldError() {
+        const error = new Error("服务器请求冷却中，还需等待约 " + Math.ceil(forumHold().remaining / 60000) + " 分钟；到期后请再次点击开始。");
+        error.name = "ForumCooldownError";
+        return error;
+    }
+    function forumChallengeError() {
+        const error = new Error("需要完成 CF 验证；请在论坛网页验证后再次点击模式按钮，脚本会先检查是否恢复。");
+        error.name = "ForumChallengeError";
+        return error;
+    }
+    function isForumChallenge(response, body) {
+        const type = response.headers.get("content-type") || "";
+        return response.headers.get("cf-mitigated") === "challenge" ||
+            /text\/html/i.test(type) && /(?:_cf_chl_opt|cf-chl-|Just a moment|challenge-platform|cf-browser-verification)/i.test(body || "");
+    }
+    function isForumSessionProbe(url, options) {
+        const target = new URL(url, location.href);
+        return target.origin === location.origin && target.pathname === "/session/current.json" &&
+            String(options.method || "GET").toUpperCase() === "GET";
+    }
+    async function recordForumResponse(response, probe) {
+        const type = response.headers.get("content-type") || "";
+        if (response.status === 429 || /text\/html/i.test(type) || response.headers.get("cf-mitigated") === "challenge") {
+            const body = await response.clone().text(), now = Date.now();
+            if (isForumChallenge(response, body)) {
+                const pending = forumChallenge(), wait = retryDelay(response.headers.get("Retry-After") || "", body);
+                localStorage.setItem(FORUM_PACE.challengeKey, JSON.stringify({at: now, status: response.status,
+                    retryUntil: Math.max(Number(pending && pending.retryUntil) || 0, wait ? now + wait : 0)}));
+            } else if (response.status === 429) {
+                const wait = Math.max(FORUM_PACE.cooldownMs, retryDelay(response.headers.get("Retry-After") || "", body));
+                const hold = forumRecord(FORUM_PACE.holdKey);
+                localStorage.setItem(FORUM_PACE.holdKey, JSON.stringify({at: now,
+                    until: Math.max(Number(hold.until) || 0, now + wait), status: 429, challenge: false}));
+            }
+        } else if (probe && response.ok && /application\/json/i.test(type)) {
+            // 正常登录接口响应才证明验证已解除；HTML、错误或无法解析的响应均不解除。
+            try {
+                const data = await response.clone().json();
+                if (data && Object.prototype.hasOwnProperty.call(data, "current_user") &&
+                    (data.current_user === null || data.current_user && typeof data.current_user.username === "string" && data.current_user.username)) {
+                    localStorage.removeItem(FORUM_PACE.challengeKey);
+                }
+            } catch (_) {}
+        }
+    }
+    function paceWait(ms, signal) {
+        return new Promise(function (resolve, reject) {
+            if (signal && signal.aborted) return reject(new DOMException("已停止", "AbortError"));
+            let timer;
+            function clean() { clearTimeout(timer); if (signal) signal.removeEventListener("abort", cancel); }
+            function cancel() { clean(); reject(new DOMException("已停止", "AbortError")); }
+            timer = setTimeout(function () { clean(); resolve(); }, ms);
+            if (signal) signal.addEventListener("abort", cancel, { once: true });
+        });
+    }
+    function deadlineError() { const e = new Error("已到设定运行时间"); e.name = "RunDeadlineError"; return e; }
+    function submissionClock(key) {
+        let v = {};
+        try { v = JSON.parse(localStorage.getItem(key) || "{}"); } catch (_) {}
+        return v && typeof v === "object" ? v : {};
+    }
+    function submissionDue(clock, timing) {
+        const replyDue = Math.max((Number(clock.replyAt) || 0) + timing.replyRange[0] * 1000, Number(clock.replyNext) || 0);
+        const topicDue = String(clock.topic || "") === timing.topic ? 0 :
+            Math.max((Number(clock.topicAt) || 0) + timing.topicRange[0] * 1000, Number(clock.topicNext) || 0);
+        return Math.max(replyDue, topicDue);
+    }
+    async function pacedForumFetch(url, options) {
+        const opts = Object.assign({}, options || {}), signal = opts.signal, pace = opts.ldhPace || {};
+        delete opts.ldhPace; // 内部调度信息不传给 fetch。
+        const timing = pace.timing, probe = isForumSessionProbe(url, opts);
+        function check() {
+            if (signal && signal.aborted) throw new DOMException("已停止", "AbortError");
+            if (pace.deadline && Date.now() >= pace.deadline) throw deadlineError();
+            if (forumHold().remaining) throw forumHoldError();
+            if (forumChallenge() && !probe) throw forumChallengeError();
+        }
+        async function send() {
+            check();
+            let next = Number(localStorage.getItem(FORUM_PACE.nextKey)) || 0;
+            let clock = timing ? submissionClock(timing.key) : {};
+            next = Math.max(next, timing ? submissionDue(clock, timing) : 0);
+            const delay = Math.max(0, next - Date.now());
+            if (delay) await paceWait(Math.min(delay, pace.deadline ? Math.max(0, pace.deadline - Date.now()) : delay), signal);
+            check();
+            const at = Date.now();
+            localStorage.setItem(FORUM_PACE.nextKey, String(at + (pace.gapMs || FORUM_PACE.gapMs)));
+            if (timing) {
+                const switched = String(clock.topic || "") !== timing.topic;
+                clock = { topic: timing.topic, topicAt: switched ? at : clock.topicAt,
+                    topicNext: switched ? at + intervalMs(timing.topicRange) : clock.topicNext,
+                    replyAt: at, replyNext: at + intervalMs(timing.replyRange) };
+                localStorage.setItem(timing.key, JSON.stringify(clock));
+                if (pace.onDispatch) pace.onDispatch();
+            }
+            // 仅保存本次运行最近 200 次请求的时间与状态；不记录请求头、正文或账号凭据。
+            const evidence = pace.deadline && running ? { at: at, method: String(opts.method || "GET").toUpperCase(),
+                path: new URL(url, location.href).pathname, stage: runStage, status: null } : null;
+            if (evidence) { requestEvidence.push(evidence); if (requestEvidence.length > 200) requestEvidence.shift(); }
+            try {
+                const response = await fetchRawTimed(url, opts);
+                if (evidence) { evidence.status = response.status; evidence.durationMs = Date.now() - at; }
+                await recordForumResponse(response, probe);
+                return response;
+            } catch (e) {
+                if (evidence) { evidence.durationMs = Date.now() - at; evidence.error = e.name + ": " + (e.message || "请求失败"); }
+                throw e;
+            }
+        }
+        const queued = forumQueue.then(function () {
+            // Web Locks 与 localStorage 在同一浏览器环境的标签页之间共享。
+            if (!navigator.locks || !navigator.locks.request) throw new Error("浏览器不支持跨标签页请求排队，已停止自动请求。");
+            const lockOptions = { mode: "exclusive" };
+            if (signal) lockOptions.signal = signal;
+            return navigator.locks.request(FORUM_PACE.lock, lockOptions, send);
+        });
+        forumQueue = queued.catch(function () {});
+        if (!signal) return queued;
+        // 前面还有其他请求时也立即响应停止；队列中的旧任务稍后只会取消，不会发送。
+        return new Promise(function (resolve, reject) {
+            function cancel() { reject(new DOMException("已停止", "AbortError")); }
+            if (signal.aborted) cancel();
+            else signal.addEventListener("abort", cancel, { once: true });
+            queued.then(resolve, reject).finally(function () { signal.removeEventListener("abort", cancel); });
+        });
+    }
     async function fetchTimed(url, options) {
+        const target = new URL(url, location.href);
+        if (location.hostname === "linux.do" && target.origin === location.origin) return pacedForumFetch(url, options);
+        return fetchRawTimed(url, options);
+    }
+
+    async function fetchRawTimed(url, options) {
         const opts = Object.assign({}, options || {}), parent = opts.signal;
         const ctrl = new AbortController();
         let timedOut = false;
@@ -104,7 +264,11 @@
         if (parent && parent.aborted) throw new DOMException("请求已取消", "AbortError");
         if (parent) parent.addEventListener("abort", cancel, { once: true });
         opts.signal = ctrl.signal;
-        const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, 20000);
+        // 只缩短论坛读取；提交仍保留 20 秒，避免不确定是否写入时重复提交。
+        const target = new URL(url, location.href);
+        const method = String(opts.method || "GET").toUpperCase();
+        const timeoutMs = target.origin === "https://linux.do" && (method === "GET" || method === "HEAD") ? 8000 : 20000;
+        const timer = setTimeout(function () { timedOut = true; ctrl.abort(); }, timeoutMs);
         try {
             const response = await fetch(url, opts);
             await response.clone().arrayBuffer();
@@ -596,7 +760,7 @@
                 try { if (handle) handle.close(); } catch (_) {}
                 if (error) reject(error); else resolve(value);
             }
-            try { handle = GM_openInTab(AR.HOST + "/?ar_auto=1", { active: true, insert: true, setParent: true }); }
+            try { if(location.hostname === "linux.do" && !forumSideReady())throw new Error("论坛未就绪，暂缓 Agent 授权"); handle = GM_openInTab(AR.HOST + "/?ar_auto=1", { active: true, insert: true, setParent: true }); }
             catch (_) { finish(new Error("无法打开 Agent 登录标签")); return; }
             if (!handle) { finish(new Error("无法打开 Agent 登录标签")); return; }
             say(withLogout ? "正在 Agent 页面退出并重新登录…" : "正在 Agent 页面确认登录状态…");
@@ -638,6 +802,7 @@
         } catch (_) { return null; }
     }
     function anyOpenTab() {
+        if(location.hostname === "linux.do" && !forumSideReady())return;
         gmSet(ANY.FLOW, JSON.stringify({ step: "start", ts: Date.now() }));
         try { GM_openInTab(ANY.HOST + "/console", { active: true, insert: true, setParent: true }); } catch (_) { window.open(ANY.HOST + "/console"); }
     }
@@ -1661,30 +1826,24 @@
     // 论坛：三种模式、等级/积分、点赞与邀请。
     const COMMON = {
         MSECS_MIN: 800, MSECS_MAX: 1400,
-        FLOOR_INTERVAL: 800,
-        MAX_BATCH: 60,
-        TOPIC_OVERHEAD_MS: 2300,
-        ENTER_MIN: 700, ENTER_MAX: 1200,
-        HARD_BLOCK_RETRY_THRESHOLD: 600, CF_BACKOFF_MS: 10000, MAX_CONSEC_CF: 5,
+        MAX_BATCH: 60, // 读取接口的分页大小，与单次上传数量无关。
+        HARD_BLOCK_RETRY_THRESHOLD: 600,
         LIKE_REACTION: "heart"
     };
-    const GAP_MIN_MS = clamp(Math.round(Number(CFG.REQ_GAP_SEC[0]) * 1000) || COMMON.FLOOR_INTERVAL, COMMON.FLOOR_INTERVAL, 99000);
-    const GAP_MAX_MS = clamp(Math.round(Number(CFG.REQ_GAP_SEC[1]) * 1000) || GAP_MIN_MS, GAP_MIN_MS, 99000);
-
     const MODES = {
-        daily: { key: "daily", name: "日常维护", color: "#2f6f3e", minutes: CFG.DAILY_MINUTES, topics: CFG.DAILY_TOPICS, replies: CFG.DAILY_REPLIES, likes: CFG.DAILY_LIKES, minPosts: 5 },
-        fast:  { key: "fast",  name: "快速升级", color: "#33507a", minutes: CFG.FAST_MINUTES,  topics: CFG.FAST_TOPICS,  replies: CFG.FAST_REPLIES,  likes: CFG.FAST_LIKES,  minPosts: 5 },
-        idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a", minutes: CFG.IDLE_MINUTES,  topics: CFG.IDLE_TOPICS,  replies: CFG.IDLE_REPLIES,  likes: CFG.IDLE_LIKES,  minPosts: 8, fullRandom: true  }
+        daily: { key: "daily", name: "日常维护", color: "#2f6f3e" },
+        fast:  { key: "fast",  name: "快速升级", color: "#33507a" },
+        idle:  { key: "idle",  name: "日常挂机", color: "#6a4b8a" }
     };
     const MODE_KEYS = ["daily", "fast", "idle"];
-    function totalMs(M) { return M.minutes * 60 * 1000; }
+    function totalMs() { return runSettings ? runSettings.minutes * 60 * 1000 : 0; }
 
-    let running = false, abort = false, activeMode = "", startedAt = 0, csrf = "", consecCf = 0, uiTimer = null;
-    let engineController = null, consecutiveErrors = 0, stopReason = "";
+    let running = false, abort = false, activeMode = "", startedAt = 0, csrf = "", uiTimer = null;
+    let engineController = null, deadlineTimer = null, consecutiveErrors = 0, stopReason = "", stopKind = "";
     function forumRateNotice(response, url, method, body) {
         let path = "";
         try { path = new URL(url, location.origin).pathname; } catch (_) {}
-        const label = /^\/t\//.test(path) ? "主题读取" : /^\/user_actions/.test(path) ? "用户动态读取" : /^\/posts\//.test(path) ? "回复读取" : /^\/(top|latest)\./.test(path) ? "主题列表读取" : path === "/topics/timings" ? "阅读记录提交" : "论坛读取";
+        const label = /^\/t\//.test(path) ? "主题读取" : /^\/user_actions/.test(path) ? "用户动态读取" : /^\/posts\//.test(path) ? "回复读取" : /^\/(unseen|new|hot|top|latest)\./.test(path) ? "主题列表读取" : path === "/topics/timings" ? "阅读记录提交" : "论坛读取";
         const waitMs = retryDelay(response.headers.get("Retry-After") || "", body);
         let errorType = "";
         try { errorType = String(JSON.parse(body).error_type || "").slice(0,80); } catch (_) {}
@@ -1694,19 +1853,48 @@
         return label + "被限流（HTTP 429），已停止。" + wait;
     }
 
-    async function engineFetch(url, options) {
-        if (abort || (activeMode && elapsed() >= totalMs(MODES[activeMode]))) return Promise.reject(new DOMException("已停止", "AbortError"));
-        const opts = Object.assign({}, options || {}, { signal: engineController ? engineController.signal : undefined });
-        const response = await fetchTimed(url, opts);
-        if ((opts.method || "GET").toUpperCase() === "GET" && [401, 403, 429].indexOf(response.status) >= 0) {
-            const body = await response.clone().text();
-            stopEngine(response.status === 429 ? forumRateNotice(response, url, "GET", body) :
-                CF_CHALLENGE_RE.test(body) ? "遇到验证页面，已停止，请先在网页完成验证。" : "登录已失效或没有访问权限，已停止。");
-        }
-        return response;
+    function anyActionDone() { return sent.topics > 0 || sent.replies > 0 || sent.likes > 0; }
+    function runWarning(stage, message) {
+        runWarnings.push({ at: Date.now(), stage: stage, message: String(message || "请求失败").slice(0, 240) });
+        if (runWarnings.length > 50) runWarnings.shift();
+        render();
     }
-    function stopEngine(reason) {
-        stopReason = reason || "已停止";
+    function terminalRunError(e) {
+        return abort || ["AbortError", "RunDeadlineError", "ForumCooldownError", "ForumChallengeError"].indexOf(e && e.name) >= 0;
+    }
+    async function engineFetch(url, options) {
+        if (abort) throw new DOMException("已停止", "AbortError");
+        if (running && elapsed() >= totalMs()) { stopEngine("已到设定运行时间", "timeout"); throw deadlineError(); }
+        const opts = Object.assign({}, options || {}, { signal: engineController ? engineController.signal : undefined });
+        opts.ldhPace = Object.assign({}, opts.ldhPace || {}, { gapMs: FORUM_PACE.gapMs, deadline: startedAt + totalMs() });
+        const target = new URL(url, location.href);
+        const readOnly = String(opts.method || "GET").toUpperCase() === "GET" && target.searchParams.get("track_visit") !== "true";
+        // 只有读取能在原截止时间内重试一次；访问登记、阅读 POST、点赞 PUT 均不自动重发。
+        for (let attempt = 0; ; attempt++) {
+            let response;
+            try { response = await fetchTimed(url, opts); }
+            catch (e) {
+                if (terminalRunError(e) || !readOnly || attempt >= 1 || totalMs() - elapsed() <= 2500) throw e;
+                runWarning(target.pathname, "读取暂时失败，稍后重试一次：" + (e.message || e.name));
+                await sleep(2000); continue;
+            }
+            if ([401, 403, 429].indexOf(response.status) >= 0 || /text\/html/i.test(response.headers.get("content-type") || "") || response.headers.get("cf-mitigated") === "challenge") {
+                const body = await response.clone().text();
+                if (isForumChallenge(response, body)) stopEngine(forumChallengeError().message, "challenge");
+                else if (response.status === 429) stopEngine(forumRateNotice(response, url, (opts.method || "GET").toUpperCase(), body) + " 冷却期内禁止再次启动。", "rate_limited");
+                else if (response.status === 401) stopEngine("登录已失效，已停止请求。", "unauthenticated");
+                // 普通 403 只代表本接口被拒绝，由主题或点赞流程跳过；CF 403 已在上面处理。
+            }
+            if (!abort && readOnly && response.status >= 500 && attempt < 1 && totalMs() - elapsed() > 2500) {
+                runWarning(target.pathname, "HTTP " + response.status + "，稍后重试读取一次");
+                await sleep(2000); continue;
+            }
+            return response;
+        }
+    }
+    function stopEngine(reason, kind) {
+        if (abort) return;
+        stopReason = reason || "已停止"; stopKind = kind || "stopped";
         abort = true;
         if (engineController) engineController.abort();
         wakeAll();
@@ -1719,8 +1907,57 @@
     let summary = null, summaryState = "idle";
     let ldc = { state: "idle", value: "", msg: "" };
 
-    let plan = { topics: 0, replies: 0, likes: 0 };
-    const sent = { topics: 0, replies: 0, likes: 0, timingReq: 0 };
+    let batchEvidence = [], requestEvidence = [], runWarnings = [];
+    const sent = { topics: 0, replies: 0, likes: 0, timingReq: 0, processed: 0 };
+    let runSettings = null, runStage = "", accountState = "unknown", accountError = "";
+    let readLedger = {};
+    const processedTopics = new Set();
+    let forumStableAt = 0, forumAuthAt = 0, sideAllowed = false;
+    function managedByPython() { return sessionStorage.getItem("ldh_python_managed") === "1"; }
+    function forumSurfaceReady() {
+        const app = !!document.querySelector("#main-outlet,.topic-list,.topic-body");
+        const blocking = /Just a moment|Checking your browser|正在验证|请稍候/i.test(document.title) ||
+            !!document.querySelector("#challenge-form,#cf-challenge-running,#challenge-stage");
+        return app && !blocking && !forumChallenge() && !forumHold().remaining && accountState === "authenticated";
+    }
+    function forumSideReady() {
+        return location.hostname === "linux.do" && forumSurfaceReady() && forumStableAt > 0 &&
+            Date.now() - forumStableAt >= 8000 && forumAuthAt > 0 && (!managedByPython() || sideAllowed);
+    }
+    function publishHealth() {
+        const ready = forumSurfaceReady();
+        if (!ready) { forumStableAt = 0; sideAllowed = false; }
+        else if (!forumStableAt) forumStableAt = Date.now();
+        if (running && (!ready && (forumChallenge() || document.querySelector("#challenge-form,#cf-challenge-running")))) stopEngine(forumChallengeError().message,"challenge");
+        const last = readJson("ld_helper_last",null);
+        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.0",user:me.username,
+            account:accountState,ready:ready && Date.now()-forumStableAt>=8000,challenge:!!forumChallenge(),
+            holdUntil:forumHold().until,running:running,startedAt:startedAt,deadline:startedAt+totalMs(),
+            sent:Object.assign({},sent),settings:runSettings ? Object.assign({},runSettings) : null,
+            success:anyActionDone(),warningCount:runWarnings.length,stage:runStage,error:accountError,sideReady:forumSideReady(),last:last}));
+    }
+    function initPythonBridge() {
+        document.addEventListener("ldh-command",function(e){
+            let cmd;try{cmd=JSON.parse(e.detail);}catch(_){return;}
+            if(cmd.action==="start")startMode(cmd.mode||"daily");
+            else if(cmd.action==="stop")stopEngine("Python 请求停止","stopped");
+            else if(cmd.action==="probe"&&!running)refreshForumUser(true);
+            else if(cmd.action==="side"&&forumSurfaceReady()){
+                sideAllowed=true;
+                if(forumSideReady()){sync();refreshCredit(false).then(function(){if(forumSideReady())return runArCheckin(false);}).catch(function(){});}
+            }
+            publishHealth();
+        });
+        setInterval(publishHealth,1000);publishHealth();
+    }
+    function ledgerKey() { return "ldh_read_120_" + normUser(me.username); }
+    function saveRead(id, lastRead) {
+        readLedger[id] = { lastRead: lastRead, at: Date.now() };
+        const ids = Object.keys(readLedger);
+        if (ids.length > 50000) ids.sort(function (a, b) { return readLedger[a].at - readLedger[b].at; })
+            .slice(0, ids.length - 50000).forEach(function (id) { delete readLedger[id]; });
+        writeJson(ledgerKey(), readLedger);
+    }
     const handledLikeTopics = new Set();
 
     function elapsed() { return startedAt ? Date.now() - startedAt : 0; }
@@ -1814,6 +2051,7 @@
     }
 
     function creditForegroundLogin() {
+        if(!forumSideReady())return Promise.reject(new Error("论坛未就绪，暂缓 Credit 授权"));
         return new Promise(function (resolve, reject) {
             let handle = null;
             try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1", { active: true, insert: true, setParent: true }); }
@@ -1842,6 +2080,7 @@
 
     let creditJob = null;
     function refreshCredit(manual) {
+        if(!forumSideReady())return Promise.resolve();
         if (!creditJob) creditJob = refreshCreditOnce(manual).finally(function () { creditJob = null; });
         return creditJob;
     }
@@ -1964,6 +2203,7 @@
         });
     }
     function openConnectTab() {
+        if(!forumSideReady())return;
 
         syncState = "opening"; render();
 
@@ -2011,6 +2251,7 @@
         render();
     }
     function sync() {
+        if(!forumSideReady())return;
 
         if (!me.username) return;
         if (isLowTL()) { loadSummary(true); return; }
@@ -2021,72 +2262,126 @@
         });
     }
 
-    function schedule(T) {
-        const M = MODES[activeMode];
-        const remTime = Math.max(0, T - elapsed());
-        const remReplies = Math.max(0, plan.replies - sent.replies);
-        const remTopics = Math.max(0, plan.topics - sent.topics);
-        const minReq = Math.max(Math.ceil(remTime / GAP_MAX_MS), remTopics, 1);
-        const avg = remTime / minReq;
-        let interval, cap, estReq, batchOverride = null;
-        if (M && M.fullRandom) {
-            cap = clamp(Math.round(avg * 2), GAP_MIN_MS, GAP_MAX_MS);
-            interval = randInt(GAP_MIN_MS, cap);
-            estReq = Math.max(1, Math.round(remTime / Math.max(1, cap / 2)));
-        } else {
-            const rr = Math.max(0, plan.replies - sent.replies);
-            const rt = Math.max(0, plan.topics - sent.topics);
-            const reqForPosts = rr > 0 ? Math.ceil(rr / COMMON.MAX_BATCH) : 0;
-            const needReq = Math.max(rt, reqForPosts, 1);
-            batchOverride = rr > 0 ? Math.ceil(rr / needReq) : 1;
-            batchOverride = clamp(batchOverride, 1, COMMON.MAX_BATCH);
-            const overhead = rt * COMMON.TOPIC_OVERHEAD_MS;
-            const usable = Math.max(0, remTime - overhead);
-            const avgGap = usable / needReq;
-            const lo = clamp(Math.round(avgGap * 0.4), GAP_MIN_MS, GAP_MAX_MS);
-            const hi = clamp(Math.round(avgGap * 1.6), lo, GAP_MAX_MS);
-            interval = randInt(lo, hi);
-            cap = hi;
-            estReq = minReq;
-        }
-        let batch = batchOverride !== null ? batchOverride : (remReplies > 0 ? Math.round(remReplies / estReq) : 1);
-        batch = clamp(batch, 1, COMMON.MAX_BATCH);
-        return { batch: batch, interval: interval, remReq: estReq, remTime: remTime, cap: cap };
-    }
-
     function csrfMeta() { const m = document.querySelector('meta[name="csrf-token"]'); return m ? m.getAttribute("content") : ""; }
-    async function getCsrf(signal) { let t = csrfMeta(); if (t) return t; try { const r = await fetchTimed("/session/csrf.json", { signal: signal, credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (r.ok) t = (await r.json()).csrf || ""; } catch (_) {} return t; }
+    async function getCsrf(signal, force) { let t = force ? "" : csrfMeta(); if (t) return t; try { const r = await fetchTimed("/session/csrf.json", { signal: signal, credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (r.ok) t = (await r.json()).csrf || ""; } catch (_) {} return t; }
 
     async function getUser(signal) {
+        accountError = "";
         try {
             const r = await fetchTimed("/session/current.json", { signal: signal, credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
-            if (!r.ok) return { username: "", trustLevel: null };
-            const u = (await r.json()).current_user;
-            if (u) {
-                const tl = (u.trust_level === undefined || u.trust_level === null) ? null : Number(u.trust_level);
-                return { username: String(u.username || ""), trustLevel: (tl === null || isNaN(tl)) ? null : tl };
+            const body = await r.text();
+            if (!r.ok) {
+                let detail = "";
+                try { const data = JSON.parse(body); detail = (data.errors || []).join("；"); } catch (_) {}
+                accountError = "登录查询 HTTP " + r.status + (detail ? "：" + detail : "");
+                writeJson("ldh_session_diagnostic", {at:Date.now(),status:r.status,retryAfter:r.headers.get("Retry-After"),message:accountError});
             }
-        } catch (_) {}
+            const challenge = isForumChallenge(r, body);
+            if (challenge) {
+                accountError = forumChallengeError().message;
+                writeJson("ldh_session_diagnostic", {at:Date.now(),kind:"challenge",status:r.status,
+                    retryAfter:r.headers.get("Retry-After"),message:accountError});
+            }
+            accountState = challenge ? "challenge" : r.status === 429 ? "rate_limited" : r.status === 401 ? "anonymous" : "unknown";
+            if (r.ok && !challenge) {
+                const u = JSON.parse(body).current_user;
+                accountState = u && u.username ? "authenticated" : "anonymous";
+                if(accountState === "authenticated") forumAuthAt = Date.now();
+                if (u && u.username) {
+                    const tl = u.trust_level == null ? null : Number(u.trust_level);
+                    return { username: String(u.username), trustLevel: tl === null || isNaN(tl) ? null : tl };
+                }
+            }
+        } catch (e) {
+            if (!signal || !signal.aborted) {
+                accountState = e && e.name === "ForumChallengeError" ? "challenge" : e && e.name === "ForumCooldownError" ? (forumChallenge() ? "challenge" : "rate_limited") : "unknown";
+                accountError = (e && e.name || "Error") + "：" + (e && e.message || "登录查询失败");
+                writeJson("ldh_session_diagnostic", {at:Date.now(),message:accountError});
+            }
+        }
         return { username: "", trustLevel: null };
     }
-    async function enterTopic(id) {
-        try {
-            const r = await engineFetch("/t/" + id + ".json?track_visit=true&forceLoad=true", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest", "Discourse-Logged-In": "true", "Discourse-Present": "true", "Discourse-Track-View": "true", "Discourse-Track-View-Topic-Id": String(id), "X-CSRF-Token": csrf } });
-            if (!r.ok) return { ok: false }; const d = await r.json();
-            return { ok: true, highest: Number(d.highest_post_number || (d.post_stream && d.post_stream.stream ? d.post_stream.stream.length : 0) || 0), lastRead: Number(d.last_read_post_number || (d.topic_user && d.topic_user.last_read_post_number) || 0) };
-        } catch (_) { return { ok: false }; }
+    function accountLabel() {
+        return { anonymous: "未登录", rate_limited: "接口限流", challenge: "接口待验证", unknown: "登录待确认" }[accountState] || "未登录";
     }
+    // 缺失字段不等于从未读过；有明确未读证据且无历史访问证据才进入首次阅读队列。
+    function topicReadState(t) {
+        const u = t.topic_user || {};
+        const values = [t, u].filter(function (v) { return Object.prototype.hasOwnProperty.call(v, "last_read_post_number"); })
+            .map(function (v) { return v.last_read_post_number; });
+        const hasRead = values.length > 0 && values.every(function (v) { return v === null || v === 0 || v === "0"; });
+        const malformed = values.some(function (v) { return v !== null && (!Number.isInteger(Number(v)) || Number(v) < 0 || typeof v === "boolean"); });
+        const lastRead = Math.max(0, Number(t.last_read_post_number) || 0, Number(u.last_read_post_number) || 0);
+        const visited = t.visited === true || t.seen === true || !!t.last_visited_at || !!t.first_visited_at || !!u.last_visited_at || !!u.first_visited_at;
+        return { lastRead: lastRead, fresh: !malformed && !visited && lastRead === 0 && (hasRead || t.unseen === true), visited: visited, malformed: malformed };
+    }
+    async function enterTopic(candidate) {
+        const id = candidate.id;
+        // 检查本身不登记访问，避免候选复核污染主题统计。
+        const r = await engineFetch("/t/" + id + ".json", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+        if (r.status === 404 || r.status === 410) return { ok: false };
+        if (!r.ok) throw new Error("主题读取失败 HTTP " + r.status);
+        const d = await r.json(), state = topicReadState(d);
+        if (d.archetype && d.archetype !== "regular") return { ok: false };
+        const local = readLedger[id];
+        const posts = (d.post_stream || {}).posts || [];
+        const postCache = candidate.postCache || new Map();
+        posts.forEach(function (p) { postCache.set(String(p.id), p); });
+        // 详情接口可能不返回阅读历史字段；首次证据来自列表，详情只排除冲突和已读帖。
+        return { ok: true, fresh: candidate.fresh && !state.malformed && !state.visited && state.lastRead === 0 && !local && !posts.some(function (p) { return p.read === true; }),
+            lastRead: Math.max(candidate.lastRead, state.lastRead, Number(local && local.lastRead) || 0),
+            highest: Number(d.highest_post_number || d.posts_count || 0),
+            posts: posts, postCache: postCache, stream: (d.post_stream || {}).stream || [] };
+    }
+    async function trackTopicVisit(id) {
+        // 复核通过且确有可读帖子后，才保留原脚本的访问登记。
+        const r = await engineFetch("/t/" + id + ".json?track_visit=true", { credentials: "same-origin", cache: "no-store", headers: {
+            "Accept": "application/json", "X-Requested-With": "XMLHttpRequest", "Discourse-Logged-In": "true",
+            "Discourse-Present": "true", "Discourse-Track-View": "true", "Discourse-Track-View-Topic-Id": String(id), "X-CSRF-Token": csrf
+        } });
+        if (!r.ok) throw new Error("主题访问登记失败 HTTP " + r.status);
+    }
+    async function unreadPostNumbers(id, meta, limit) {
+        // 按真实 stream 顺序补齐；避免初始窗口里包含尾帖时跳过中间的未读帖。
+        if (!meta.postCache) meta.postCache = new Map(meta.posts.map(function (p) { return [String(p.id), p]; }));
+        const ids = meta.stream.length ? meta.stream.map(String) : meta.posts.slice().sort(function (a, b) { return a.post_number - b.post_number; }).map(function (p) { return String(p.id); });
+        const numbers = new Set();
+        for (let i = 0; i < ids.length && numbers.size < limit && !abort; i++) {
+            if (!meta.postCache.has(ids[i])) {
+                const missing = ids.slice(i, i + COMMON.MAX_BATCH).filter(function (pid) { return !meta.postCache.has(pid); });
+                const query = new URLSearchParams();
+                missing.forEach(function (pid) { query.append("post_ids[]", pid); });
+                const r = await engineFetch("/t/" + id + "/posts.json?" + query.toString(), { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+                if (!r.ok) throw new Error("未读帖子读取失败 HTTP " + r.status);
+                const posts = ((await r.json()).post_stream || {}).posts || [];
+                missing.forEach(function (pid) { meta.postCache.set(pid, null); });
+                posts.forEach(function (p) { meta.postCache.set(String(p.id), p); });
+            }
+            const p = meta.postCache.get(ids[i]);
+            if (!p) continue;
+            const n = Number(p.post_number);
+            if (Number.isInteger(n) && n > meta.lastRead && n >= 1 && p.read === false && !p.deleted_at && !p.hidden &&
+                (p.post_type == null || p.post_type === 1)) numbers.add(n);
+        }
+        return Array.from(numbers).sort(function (a, b) { return a - b; });
+    }
+    function timingSettings(id) {
+        return { key: "ldh_submission_clock_" + normUser(me.username), topic: String(id),
+            topicRange: runSettings.topicIntervalSec, replyRange: runSettings.replyIntervalSec };
+    }
+    function intervalMs(range) { return randInt(Math.round(range[0] * 1000), Math.round(range[1] * 1000)); }
+
     async function postTimings(id, nums) {
         const p = new URLSearchParams(); p.set("topic_id", String(id)); let total = 0;
         nums.forEach(function (n) { const ms = randInt(COMMON.MSECS_MIN, COMMON.MSECS_MAX); total += ms; p.set("timings[" + n + "]", String(ms)); });
         p.set("topic_time", String(total));
         let resp, body = "", ra = "", ct = "";
-        try { resp = await engineFetch("/topics/timings", { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest", "Discourse-Present": "true" }, body: p.toString() }); }
-        catch (e) { return { kind: "neterr" }; }
+        try { resp = await engineFetch("/topics/timings", { ldhPace: { timing: timingSettings(id), onDispatch: function () { sent.timingReq++; } }, method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-CSRF-Token": csrf, "X-Requested-With": "XMLHttpRequest", "Discourse-Present": "true" }, body: p.toString() }); }
+        catch (e) { if (e.name === "AbortError" || e.name === "RunDeadlineError" || e.name === "ForumCooldownError" || e.name === "ForumChallengeError") throw e; return { kind: "neterr", message: e.message || "网络错误" }; }
         try { ra = resp.headers.get("Retry-After") || ""; } catch (_) {}
         try { ct = resp.headers.get("Content-Type") || ""; } catch (_) {}
         try { body = await resp.text(); } catch (_) {}
-        return { kind: classify(resp.status, body, ra, ct), retryMs: retryDelay(ra, body) };
+        return { kind: classify(resp.status, body, ra, ct), status: resp.status, retryMs: retryDelay(ra, body) };
     }
     function retryDelay(ra, body) {
         const value = String(ra || "").trim();
@@ -2155,45 +2450,84 @@
     }
 
     const TOPIC_SOURCES = [
-        "/top.json?period=all", "/top.json?period=yearly", "/top.json?period=quarterly",
-        "/top.json?period=monthly", "/latest.json?order=posts", "/latest.json"
+        { name: "unseen", path: "/unseen.json" },
+        { name: "new", path: "/new.json" },
+        { name: "latest", path: "/latest.json" },
+        { name: "hot", path: "/hot.json" },
+        { name: "top", path: "/top.json?period=all" }
     ];
     const pool = {
-        queue: [], seen: new Set(), src: 0, page: 0, exhausted: false,
-        reset: function () { this.queue = []; this.seen = new Set(); this.src = 0; this.page = 0; this.exhausted = false; }
+        fresh: [], seen: new Set(), sources: [], cursor: 0, exhausted: false,
+        pages: 0, skipped: 0, unknown: 0, disabled: [],
+        reset: function (keepSeen) {
+            this.fresh = [];
+            if (!keepSeen) { this.seen = new Set(); this.pages = 0; this.skipped = 0; this.unknown = 0; this.disabled = []; }
+            this.sources = (activeMode === "fast" ? TOPIC_SOURCES : TOPIC_SOURCES.slice(0, 3)).map(function (s) {
+                return { name: s.name, path: s.path, page: 0, fetched: 0, revision: sent.replies, done: false, signature: "" };
+            });
+            this.cursor = 0; this.exhausted = false;
+        }
     };
     async function listTopics(url) {
-        try { const r = await engineFetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (!r.ok) return []; const topics = ((await r.json()).topic_list || {}).topics; return Array.isArray(topics) ? topics : []; } catch (_) { return []; }
+        const r = await engineFetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+        if ([404, 410, 422].indexOf(r.status) >= 0) return { unavailable: true, topics: [] };
+        if (!r.ok) throw new Error("主题列表读取失败 HTTP " + r.status);
+        const d = await r.json();
+        if (!d.topic_list || !Array.isArray(d.topic_list.topics)) throw new Error("主题列表格式不完整，已停止");
+        return { topics: d.topic_list.topics };
     }
-    async function refillPool(minPosts) {
-        let rounds = 0;
-        const M = MODES[activeMode];
-        while (pool.queue.length < 40 && rounds < 40 && !pool.exhausted && !abort && (!M || elapsed() < totalMs(M))) {
-            rounds++;
-            const base = TOPIC_SOURCES[pool.src];
-            const url = base + (base.indexOf("?") >= 0 ? "&" : "?") + "per_page=50&page=" + pool.page;
-            const raw = await listTopics(url);
-            if (abort) return false;
-            const fresh = [];
-            raw.forEach(function (t) {
+    async function refillPool() {
+        while (!pool.fresh.length && !pool.exhausted && !abort && elapsed() < totalMs()) {
+            const available = pool.sources.filter(function (s) { return !s.done; });
+            if (!available.length) { pool.exhausted = true; break; }
+            const source = pool.sources[pool.cursor++ % pool.sources.length];
+            if (source.done) continue;
+            // unseen/new 会随阅读删除条目；重新从第 0 页扫描并沿用 seen 去重，防止偏移分页漏题。
+            if ((source.name === "unseen" || source.name === "new") && source.revision !== sent.replies) {
+                source.page = 0; source.signature = ""; source.revision = sent.replies;
+            }
+            runStage = "查找未读主题 · " + source.name + " 第" + (source.page + 1) + "页";
+            render();
+            const url = source.path + (source.path.indexOf("?") >= 0 ? "&" : "?") + "per_page=50&page=" + source.page;
+            let result;
+            try { result = await listTopics(url); }
+            catch (e) {
+                if (terminalRunError(e)) throw e;
+                source.done = true; pool.disabled.push(source.name);
+                runWarning("主题列表", source.name + " 暂不可用，尝试下一入口：" + e.message);
+                continue;
+            }
+            if (abort) return;
+            pool.pages++;
+            if (result.unavailable) { source.done = true; pool.disabled.push(source.name); continue; }
+            const raw = result.topics;
+            const signature = raw.map(function (t) { return t.id; }).join(",");
+            if (!raw.length || signature === source.signature) { source.done = true; continue; }
+            source.signature = signature;
+            source.page++; source.fetched++;
+            // 有限扫描；资源不足时报告，不回到热门第一页反复提交。
+            if (source.fetched >= 100) source.done = true;
+            shuffle(raw).forEach(function (t) {
                 const id = t && t.id ? String(t.id) : "";
                 if (!id || pool.seen.has(id)) return;
-                const h = Number(t.highest_post_number || t.posts_count || 0);
-                if (h >= minPosts && Number(t.last_read_post_number || 0) < h) { pool.seen.add(id); fresh.push(id); }
+                if (t.archetype && t.archetype !== "regular") return;
+                pool.seen.add(id);
+                const state = topicReadState(t), local = readLedger[id];
+                const lastRead = Math.max(state.lastRead, Number(local && local.lastRead) || 0);
+                const highest = Number(t.highest_post_number || t.posts_count || 0);
+                const fresh = state.fresh && !local;
+                if (!fresh && lastRead === 0) { pool.unknown++; return; }
+                if (highest <= lastRead) { pool.skipped++; return; }
+                const candidate = { id: id, fresh: fresh, lastRead: lastRead, source: source.name };
+                if (fresh) pool.fresh.push(candidate);
+                else { pool.skipped++; }
             });
-            pool.queue = pool.queue.concat(shuffle(fresh));
-            pool.src++;
-            if (pool.src >= TOPIC_SOURCES.length) {
-                pool.src = 0; pool.page++;
-                if (pool.page > 30) pool.exhausted = true;
-            }
-            await sleep(randInt(150, 350));
         }
-        return pool.queue.length > 0;
     }
-    async function nextTopic(minPosts) {
-        if (!pool.queue.length) { const ok = await refillPool(minPosts); if (!ok) return ""; }
-        return pool.queue.shift() || "";
+    async function nextTopic() {
+        // 只允许首次阅读主题；不足时结束，不回退到历史主题。
+        if (!pool.fresh.length && !pool.exhausted) await refillPool();
+        return pool.fresh.shift() || null;
     }
 
     let likeSlots = [], likeNames = [], likeNameIdx = 0, likeCands = [], likeDead = false;
@@ -2216,6 +2550,8 @@
             const reacted = await getReacted(c.postId);
             if (abort) return false;
             if (reacted !== false) { handledLikeTopics.add(c.topicId); await sleep(250); continue; }
+            // PUT 是切换操作，结果不明时不能再次点击同一候选，否则可能取消已成功的点赞。
+            handledLikeTopics.add(c.topicId);
             const result = await likeToggle(c.postId);
             if (abort) return false;
             const code = result.status;
@@ -2226,7 +2562,9 @@
             }
             await sleep(randInt(600, 1100));
             if (code === 429) { likeDead = true; likeSlots = []; endNote = "点赞被限流"; return false; }
-            if (code === 401 || code === 403) { likeDead = true; likeSlots = []; endNote = "点赞失败：登录已失效或没有权限"; return false; }
+            if (code === 401 || code === 403) { likeDead = true; likeSlots = []; runWarning("点赞", "HTTP " + code + "，停用本轮点赞，继续阅读"); return false; }
+            runWarning("点赞", "本条点赞未确认（" + (code ? "HTTP " + code : "网络错误") + "），跳过且不重复点击");
+            return false;
         }
         return false;
     }
@@ -2238,127 +2576,176 @@
     }
 
     async function engine(mode) {
-        const M = MODES[mode];
-        const T = totalMs(M);
-        const signal = engineController.signal;
-        me = await getUser(signal);
-        if (abort) return finish("stopped", stopReason || "已停止");
-        if (!me.username) return finish("未登录", "未登录");
+        const T = totalMs(), signal = engineController.signal, expectedUser = normUser(me.username);
+        let confirmedUser = await getUser(signal);
+        if (!abort && !confirmedUser.username && accountState === "unknown" && T - elapsed() > 2500) {
+            runWarning("登录复核", "临时故障，稍后重试一次：" + accountError);
+            await sleep(2000);
+            if (!abort) confirmedUser = await getUser(signal);
+        }
+        if (abort) return finish("stopped", stopReason);
+        if (!confirmedUser.username) {
+            // 接口故障不等于退出登录：停止运行，但保留已取得的账号与等级条件。
+            if (accountState === "anonymous") me = confirmedUser;
+            return finish(accountState === "anonymous" ? "未登录" : "登录复核失败", accountError || accountLabel());
+        }
+        me = confirmedUser;
+        if (expectedUser && normUser(me.username) !== expectedUser) return finish("账号变化", "当前账号已变化，请重新选择模式。");
         gmSet(LD_USER_KEY, normUser(me.username));
         csrf = await getCsrf(signal);
-        if (abort) return finish("stopped", stopReason || "已停止");
-        if (!csrf) return finish("无CSRF", "无CSRF");
-
-        plan.topics = randInt(M.topics[0], M.topics[1]);
-        plan.replies = randInt(M.replies[0], M.replies[1]);
-        plan.likes = randInt(M.likes[0], M.likes[1]);
-        render();
-
+        if (!abort && !csrf && !forumChallenge() && !forumHold().remaining && T - elapsed() > 2500) {
+            runWarning("CSRF", "未取得令牌，稍后重新获取一次");
+            await sleep(2000);
+            if (!abort) csrf = await getCsrf(signal, true);
+        }
+        if (abort) return finish("stopped", stopReason);
+        if (!csrf) return finish("无CSRF", "未能取得 CSRF，无法提交");
+        readLedger = readJson(ledgerKey(), {});
+        if (!readLedger || typeof readLedger !== "object" || Array.isArray(readLedger)) readLedger = {};
         likeSlots = []; likeNames = []; likeNameIdx = 0; likeCands = []; likeDead = false;
-        if (plan.likes > 0) {
-            likeSlots = buildLikeSlots(T, plan.likes);
+        if (runSettings.likes > 0) {
+            likeSlots = buildLikeSlots(Math.min(T, 10 * 60 * 1000), runSettings.likes);
             likeNames = shuffle((await loadNames()).filter(function (n) { return n && n.toLowerCase() !== me.username.toLowerCase(); }));
             if (!likeNames.length) likeDead = true;
         }
-        if (abort) return finish("stopped", stopReason || "已停止");
-
-        pool.reset();
-
+        pool.reset(); render();
+        let readingAvailable = true, csrfRefreshed = false;
         while (!abort && elapsed() < T) {
             await maybeLike();
             if (abort || elapsed() >= T) break;
-
-            const tid = await nextTopic(M.minPosts);
-            if (abort || elapsed() >= T) break;
-            if (!tid) {
-                const s = schedule(T);
-                await sleep(Math.min(s.interval, 5000));
-                if (pool.exhausted) { pool.reset(); }
-                continue;
+            if (!readingAvailable) {
+                runStage = "阅读暂不可用，等待其他动作或计时结束"; render();
+                await sleep(Math.min(1000, T - elapsed())); continue;
             }
-
-            const meta = await enterTopic(tid);
-            if (abort || elapsed() >= T) break;
-            await sleep(randInt(COMMON.ENTER_MIN, COMMON.ENTER_MAX));
-            if (!meta.ok || meta.highest < 2) continue;
-
-            const remTopics = Math.max(1, plan.topics - sent.topics);
-            const remReplies = Math.max(0, plan.replies - sent.replies);
-            let want = Math.round((remReplies / remTopics) * (0.8 + Math.random() * 0.4));
-            want = Math.max(1, Math.min(want, remReplies));
-
-            const start = Math.max(2, meta.lastRead + 1);
-            const end = Math.min(meta.highest, start + want - 1);
-            if (end < start) continue;
-            const nums = []; for (let n = start; n <= end; n++) nums.push(n);
-
-            let readThis = false, p = 0;
-            while (p < nums.length && !abort && elapsed() < T) {
-                await maybeLike();
+            let candidate;
+            try {
+                candidate = await nextTopic();
                 if (abort || elapsed() >= T) break;
-
-                const s = schedule(T);
-                const take = Math.max(1, Math.min(s.batch, nums.length - p));
-                const batch = nums.slice(p, p + take);
-                if (!batch.length) break;
-                sent.timingReq++;
-                const res = await postTimings(tid, batch);
-                if (abort) break;
-                if (res.kind === "ok") {
-                    consecCf = 0; consecutiveErrors = 0;
-                    sent.replies += batch.length;
-                    if (!readThis) { sent.topics++; readThis = true; }
-                    render();
-                    p += batch.length;
-                    await sleep(Math.min(s.interval, Math.max(0, T - elapsed())));
-                } else if (res.kind === "discourse_hard") {
-                    return finish("限流", "服务器要求暂停，已停止，请稍后再试。");
-                } else if (res.kind === "auth_error") {
-                    return finish("登录失效", "登录已失效或没有权限，请重新登录。");
-                } else if (res.kind === "cloudflare") {
-                    consecCf++; if (consecCf >= COMMON.MAX_CONSEC_CF) return finish("验证", "连续遇到验证页面，已停止，请先在网页完成验证。");
-                    await sleep(COMMON.CF_BACKOFF_MS);
-                } else if (res.kind === "discourse_soft") {
-                    await sleep(Math.min(Math.max(8000, res.retryMs || 0), Math.max(0, T - elapsed())));
-                } else {
-                    consecutiveErrors++;
-                    if (consecutiveErrors >= 5) return finish("网络异常", "连续请求失败，已停止，请检查网络或稍后重试。");
-                    await sleep(1500);
+                if (!candidate) {
+                    readingAvailable = false;
+                    runWarning("阅读", "暂无可读资源或入口不可用，保留点赞和原运行计时");
+                    continue;
                 }
+                const meta = await enterTopic(candidate);
+                if (abort || elapsed() >= T) break;
+                if (!meta.ok || !meta.fresh) continue;
+                const quota = randInt(runSettings.repliesPerSubmit[0], runSettings.repliesPerSubmit[1]);
+                const nums = await unreadPostNumbers(candidate.id, meta, quota);
+                if (!nums.length) continue;
+                await trackTopicVisit(candidate.id);
+                runStage = "首次阅读 · 主题 " + candidate.id + " · 本批 " + nums.length + " 篇";
+                render();
+                const res = await postTimings(candidate.id, nums);
+                if (abort) break;
+                if (res.kind !== "ok") {
+                    if (res.kind === "discourse_hard" || res.kind === "discourse_soft") return finish("限流", "阅读提交被限流，停止请求并保留已完成动作。");
+                    if (res.kind === "cloudflare") return finish("验证", "遇到验证页面，停止请求并保留已完成动作。");
+                    if (res.status === 401) return finish("登录失效", "登录已失效，停止请求并保留已完成动作。");
+                    if (res.status === 403 && !csrfRefreshed) {
+                        csrfRefreshed = true;
+                        const token = await getCsrf(signal, true);
+                        if (token) csrf = token;
+                    }
+                    // 不确定的 POST 不计成功、不重发，并跨运行隔离该主题；仍可处理其他主题/点赞。
+                    if (res.kind === "neterr" || res.kind === "server_error" || res.kind === "other") {
+                        readLedger[candidate.id] = { lastRead: 0, at: Date.now(), uncertain: true };
+                        writeJson(ledgerKey(), readLedger);
+                    }
+                    runWarning("阅读提交", "主题 " + candidate.id + " 已跳过：" +
+                        (res.status ? "HTTP " + res.status + "，" : "") + (res.message || res.kind));
+                    await sleep(Math.min(2000, Math.max(0, T - elapsed()))); continue;
+                }
+                batchEvidence.push({topic:candidate.id,quota:quota,actual:nums.length,at:Date.now()});
+                sent.replies += nums.length;
+                processedTopics.add(candidate.id); sent.processed++; sent.topics++;
+                meta.lastRead = Math.max(meta.lastRead, nums[nums.length - 1]);
+                saveRead(candidate.id, meta.lastRead); render();
+            } catch (e) {
+                if (terminalRunError(e)) throw e;
+                runWarning("主题读取", (candidate ? "主题 " + candidate.id + "：" : "") + (e.message || String(e)));
+                await sleep(Math.min(2000, Math.max(0, T - elapsed())));
             }
         }
-        finish(abort ? "stopped" : "done", abort ? (stopReason || "已停止") : "");
+        finish(abort ? "stopped" : "timeout", abort ? stopReason : "已到设定运行时间");
     }
 
     function finish(reason, note) {
-        const M = MODES[activeMode]; const used = M ? Math.min(elapsed(), totalMs(M)) : elapsed();
-        running = false; finishedOnce = true; if (uiTimer) { clearInterval(uiTimer); uiTimer = null; }
+        if (!running) return;
+        if (stopKind) { reason = stopKind; note = stopReason; }
+        const used = Math.min(elapsed(), totalMs());
+        const mode = activeMode;
+        running = false; abort = true; finishedOnce = true;
+        if (uiTimer) { clearInterval(uiTimer); uiTimer = null; }
+        if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = null; }
         if (engineController) { engineController.abort(); engineController = null; }
-        wakeAll();
-        frozenTimer = "⏱ " + mmss(used); if (note) endNote = note; activeMode = "";
-        writeJson("ld_helper_last", { at: Date.now(), sent: { topics: sent.topics, replies: sent.replies, likes: sent.likes }, frozen: frozenTimer, endNote: endNote });
-        restoreButtons();
-        resumeIdleWork();
-        render();
+        wakeAll(); frozenTimer = "⏱ " + mmss(used); endNote = note || ""; activeMode = "";
+        document.documentElement.removeAttribute("data-ldh-run-until");
+        writeJson("ld_helper_last", { version: "1.3.0", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
+            warnings: runWarnings.slice(), settings: Object.assign({}, runSettings), sent: Object.assign({}, sent), batches:batchEvidence.slice(), requests:requestEvidence.slice(),
+            scan: { pages: pool.pages, skipped: pool.skipped, unknown: pool.unknown }, frozen: frozenTimer, endNote: endNote });
+        restoreButtons(); resumeIdleWork(); render();
     }
-    function startMode(mode) {
-
+    function validSettings(values) {
+        if (!values || typeof values !== "object") return null;
+        const result = {};
+        for (const key of ["topicIntervalSec", "replyIntervalSec", "repliesPerSubmit"]) {
+            const range = values[key];
+            if (!Array.isArray(range) || range.length !== 2 || !range.every(function (n) {
+                return typeof n === "number" && Number.isFinite(n) && n >= 1 && n <= 86400;
+            }) || range[0] > range[1]) return null;
+            result[key] = range.slice();
+        }
+        if (typeof values.minutes !== "number" || !Number.isFinite(values.minutes)) return null;
+        result.minutes = values.minutes;
+        // 兼容已有自动化传入的固定点赞次数；顶部按钮配置统一使用区间。
+        const likes = typeof values.likes === "number" ? [values.likes, values.likes] : values.likes;
+        if (!Array.isArray(likes) || likes.length !== 2 || !likes.every(function (n) {
+            return Number.isInteger(n) && n >= 0 && n <= 1000;
+        }) || likes[0] > likes[1]) return null;
+        result.likes = likes.slice();
+        if (!result.repliesPerSubmit.every(function(n){return Number.isInteger(n) && n >= 1 && n <= 500;}) ||
+            result.minutes < 0.1 || result.minutes > 10080) return null;
+        return result;
+    }
+    function sampleRunSettings(values) {
+        const settings = validSettings(values);
+        if (!settings) return null;
+        settings.likesRange = settings.likes.slice();
+        settings.likes = randInt(settings.likesRange[0], settings.likesRange[1]);
+        return settings;
+    }
+    function startMode(mode, settings) {
         if (running) { if (mode === activeMode) stopEngine(); return; }
-        const M = MODES[mode];
-        if (!M) return;
-        endNote = ""; frozenTimer = ""; running = true; abort = false; activeMode = mode; startedAt = Date.now(); consecCf = 0;
-        engineController = new AbortController(); consecutiveErrors = 0; stopReason = "";
-        sent.topics = 0; sent.replies = 0; sent.likes = 0; sent.timingReq = 0; handledLikeTopics.clear();
-        plan.topics = 0; plan.replies = 0; plan.likes = 0;
-        suspendIdleWork();
-        markButtons(mode); if (uiTimer) clearInterval(uiTimer); uiTimer = setInterval(render, 1000); render();
-        engine(mode).catch(function (e) { finish("异常", "异常:" + (e && e.message || e)); });
+        if (!MODES[mode]) return;
+        if (forumHold().remaining) { endNote = forumHoldError().message; finishedOnce = true; render(); return; }
+        if (!me.username && !forumChallenge()) { endNote = accountLabel() + "，请先登录或点同步重试。"; finishedOnce = true; render(); return; }
+        runSettings = sampleRunSettings(settings || MODE_SETTINGS[mode]);
+        if (!runSettings) { endNote = "顶部运行参数无效，请检查区间、数量和时间。"; finishedOnce = true; render(); return; }
+        endNote = ""; runStage = "正在确认登录"; frozenTimer = ""; running = true; abort = false; activeMode = mode; startedAt = Date.now();
+        engineController = new AbortController(); consecutiveErrors = 0; stopReason = ""; stopKind = "";
+        batchEvidence = []; requestEvidence = []; runWarnings = []; sent.topics = 0; sent.replies = 0; sent.likes = 0; sent.timingReq = 0; sent.processed = 0; handledLikeTopics.clear(); processedTopics.clear();
+        document.documentElement.setAttribute("data-ldh-run-until", String(startedAt + totalMs()));
+        deadlineTimer = setTimeout(function () { stopEngine("已到设定运行时间", "timeout"); }, totalMs());
+        suspendIdleWork(); markButtons(mode);
+        if (uiTimer) clearInterval(uiTimer);
+        uiTimer = setInterval(render, 1000); render();
+        // 同一账号的标签页不能同时挑选首次主题，避免两边复核后重复提交。
+        const job = navigator.locks && navigator.locks.request ? navigator.locks.request(
+            "ldh-run", { ifAvailable: true }, function (lock) {
+                if (!lock) return finish("其他标签运行中", "当前账号已有标签运行，请等待结束。");
+                return engine(mode);
+            }) : Promise.reject(new Error("浏览器不支持跨标签页运行锁。"));
+        job.catch(function (e) {
+            const reason = e.name === "RunDeadlineError" ? "timeout" : e.name === "AbortError" ? "stopped" : "异常";
+            finish(reason, stopReason || (reason === "timeout" ? "已到设定运行时间" : e.message || String(e)));
+        });
     }
 
     function arSuccessText() {
         return gmGet(AR.REWARDKEY, "") === todayStr() ? "签到成功" : "今日登录签到已处理，接口未确认新增签到奖励";
     }
     function runArCheckin(force) {
+        if(!forumSideReady())return Promise.resolve();
         if (!me.username) return Promise.resolve();
         if (arState === "running") return Promise.resolve();
         if (idleSuspended && !force) return Promise.resolve();
@@ -2462,7 +2849,7 @@
         return v.length ? ' <span style="color:#ff8a8a;">⚠' + v.join(" ") + "</span>" : "";
     }
     function rowsForPanel() {
-        if (!me.username) return ["", ""];
+        if (!me.username) return ["登录后显示等级与阅读进度", "三个模式均可设置间隔、上传量和时间"];
 
         if (isLowTL()) {
             if (summary) {
@@ -2534,15 +2921,12 @@
 
     const START_FAIL = ["未登录", "无CSRF"];
     function progressText() {
-        const g = function (v) { return '<span style="color:#888;">/' + v + "</span>"; };
-        if (running) {
-            const goal = plan.topics ? g(plan.topics) : "";
-            const goalR = plan.replies ? g(plan.replies) : "";
-            const goalL = plan.likes ? g(plan.likes) : "";
-            return "刷帖中：主题 " + sent.topics + goal + " 丨 回复 " + sent.replies + goalR + " 丨 点赞 " + sent.likes + goalL;
-        }
-        return "脚本结束：主题 " + sent.topics + " 丨 回复 " + sent.replies + " 丨 点赞 " + sent.likes;
+        // 数量保持单行；详细结束原因保留在悬浮提示和本地运行记录中。
+        return (running ? "脚本运行：" : "脚本结束：") + "主题 " + sent.topics +
+            " · 回复 " + sent.replies + " · 点赞 " + sent.likes;
     }
+
+
 
     const ERR_MAXLEN = 22;
     function collectErrors() {
@@ -2571,11 +2955,12 @@
     }
     function render() {
         const r1 = document.getElementById("ldh_r1"); if (!r1) return;
-        ["ldh_r2", "ldh_r3", "ldh_r4"].forEach(function (id) { const row = document.getElementById(id); if (row) row.hidden = !me.username; });
+        document.documentElement.setAttribute("data-ldh-account-state", accountState);
+        ["ldh_r2", "ldh_r3", "ldh_r4"].forEach(function (id) { const row = document.getElementById(id); if (row && row.hidden) row.hidden = false; });
         const M = MODES[activeMode];
-        const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), totalMs(M))) : frozenTimer;
+        const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), totalMs())) : frozenTimer;
 
-        const nameHtml = me.username ? esc(me.username) : '<span style="color:#ff8a8a;">未登录</span>';
+        const nameHtml = me.username ? esc(me.username) : '<span style="color:#ff8a8a;">' + esc(accountLabel()) + "</span>";
         if (running) {
             let t = document.getElementById("ldh_timer");
             if (t) { t.textContent = timer; }
@@ -2606,9 +2991,9 @@
         }
 
         const r4 = document.getElementById("ldh_r4");
-        r4.title = endNote || "";
+        r4.title = (runSettings ? "本次：主题间隔 " + runSettings.topicIntervalSec.join("–") + " 秒，回复间隔 " + runSettings.replyIntervalSec.join("–") + " 秒，每个主题随机抽取 " + runSettings.repliesPerSubmit.join("–") + " 篇上限（不足按实际），点赞上限 " + runSettings.likes + " 次（配置 " + runSettings.likesRange.join("–") + "），运行 " + runSettings.minutes + " 分钟。\n" : "") + "首读＝没有历史阅读记录的候选首次提交成功；帖＝实际返回的未读帖子提交成功（含首帖）。处理主题 " + sent.processed + "；实际升级增量以论坛同步为准。" + (endNote ? "\n" + endNote : "");
         const notice = document.getElementById("ldh_notice");
-        if (notice) { notice.textContent = endNote; notice.hidden = !me.username || !endNote; }
+        if (notice) { notice.textContent = ""; notice.hidden = true; }
         if (running || finishedOnce) {
 
             const showNote = !running && endNote && START_FAIL.indexOf(endNote) >= 0;
@@ -2616,7 +3001,7 @@
             r4.innerHTML = progressText() + note;
         } else {
 
-            r4.innerHTML = errorLine();
+            r4.innerHTML = "";
         }
 
         if (running) return;
@@ -2967,6 +3352,7 @@
     function refreshForumUser(force) {
         if (forumUserJob) return force ? forumUserJob.then(function () { return refreshForumUser(); }) : forumUserJob;
         forumUserJob = getUser().then(function (u) {
+            if (!u.username && accountState !== "anonymous") { render(); return; }
             const oldUser = currentLdUser(), user = normUser(u.username);
             if (normUser(me.username) !== user) {
                 summary = null; summaryState = "idle"; syncState = "idle";
@@ -2988,12 +3374,15 @@
                 const cached = readTL3();
                 if (!cached || Date.now() - Number(cached.at || 0) > SYNC_THROTTLE_MS) sync();
             }
-            setTimeout(function () {
-                if (normUser(me.username) !== user || isLoginView()) return;
-                refreshCredit(false).catch(function () {}).then(function () {
-                    if (normUser(me.username) === user && !isLoginView()) return runArCheckin(false);
-                }).catch(function () {});
-            }, 1200);
+            if (!managedByPython()) {
+                let checks=0;
+                const sideWait=setInterval(function(){
+                    if(normUser(me.username)!==user || ++checks>60){clearInterval(sideWait);return;}
+                    if(!forumSideReady())return;
+                    clearInterval(sideWait);sync();
+                    refreshCredit(false).then(function(){if(forumSideReady())return runArCheckin(false);}).catch(function(){});
+                },1000);
+            }
         }).finally(function () { forumUserJob = null; });
         return forumUserJob;
     }
@@ -3006,12 +3395,12 @@
             "padding:2px " + UI.PAD_X + "px 9px " + UI.PAD_X + "px;border-radius:9px;width:" + UI.WIDTH + "px;box-sizing:border-box;" +
             "max-width:calc(100vw - 32px);" +
             "font-size:10px;line-height:14px;box-shadow:0 6px 16px rgba(0,0,0,0.4);overflow:visible;";
-        const rowCss = "white-space:normal;overflow-wrap:anywhere;min-height:14px;";
+        const rowCss = "white-space:nowrap;text-overflow:ellipsis;overflow:hidden;height:14px;min-height:14px;line-height:14px;";
         const btnCss = "flex:1;padding:8px 2px;border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;white-space:nowrap;";
         const smallBtnCss = "padding:3px 5px;border:none;border-radius:4px;cursor:pointer;font-size:9px;margin-left:4px;white-space:nowrap;flex-shrink:0;";
         p.innerHTML =
-            '<div id="ldh_title" style="display:flex;flex-wrap:wrap;gap:2px 4px;justify-content:space-between;align-items:center;cursor:move;min-height:20px;padding:4px 0 0 0;line-height:1.6;overflow:visible;">' +
-            '<span style="font-weight:bold;font-size:10px;white-space:nowrap;flex-shrink:0;">⚡ LINUX DO 助手</span>' +
+            '<div id="ldh_title" style="display:flex;flex-wrap:nowrap;gap:2px 4px;justify-content:space-between;align-items:center;cursor:move;height:20px;min-height:20px;padding:4px 0 0 0;line-height:1.6;overflow:visible;">' +
+            '<span style="font-weight:bold;font-size:9px;white-space:nowrap;flex-shrink:0;" title="LINUX DO 助手 1.2.11">⚡ 助手 1.2.11</span>' +
             '<span style="display:flex;align-items:center;white-space:nowrap;flex-shrink:0;">' +
 
             '<button id="ldh_invite" style="' + smallBtnCss + 'background:#1677ff;color:#fff;" title="查询未使用的待处理邀请；没有就直接创建，并复制完整链接">邀请</button>' +
@@ -3037,6 +3426,7 @@
         MODE_KEYS.forEach(function (m) { document.getElementById("ldh_" + m).addEventListener("click", function () { startMode(m); }); });
         document.getElementById("ldh_sync").addEventListener("click", function () {
 
+            if (!me.username) { refreshForumUser(true); return; }
             if (getNoOauth(me.username)) retryOauth();
             sync();
         });
@@ -3560,12 +3950,12 @@
                 '<label for="ldh_login_line">行号</label><input id="ldh_login_line" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="例如 1" autocomplete="off" aria-label="账号文件行号">' +
                 '<button id="ldh_login_fetch" type="button">获取并登录</button></div>' +
                 '<button id="ldh_login_btn" type="button">剪贴板登录</button>' +
-                '<p id="ldh_login_status" role="status" aria-live="polite">输入行号后按 Enter，或点「获取并登录」，自动填写并提交。</p>' +
+                '<p id="ldh_login_status" role="status" aria-live="polite">输入行号后按 Enter 或空格，或点「获取并登录」，自动填写并提交。</p>' +
                 '</div></section>';
             root.getElementById("ldh_login_fetch").addEventListener("click", function () { run("file"); });
             root.getElementById("ldh_login_btn").addEventListener("click", function () { run("clipboard"); });
             root.getElementById("ldh_login_line").addEventListener("keydown", function (e) {
-                if (e.key === "Enter" && !e.isComposing) {
+                if ((e.key === "Enter" || e.key === " " || e.key === "Spacebar") && !e.isComposing && e.keyCode !== 229) {
                     e.preventDefault(); e.stopPropagation();
                     if (!e.repeat) run("file");
                 }
@@ -3598,7 +3988,7 @@
                     ++generation;
                     if (request) { request.abort(); request = null; }
                     setBusy(false);
-                    status("输入行号后按 Enter，或点「获取并登录」，自动填写并提交。");
+                    status("输入行号后按 Enter 或空格，或点「获取并登录」，自动填写并提交。");
                 }
                 if (panel && panel.isConnected) panel.remove();
                 if (hiddenMain) { hiddenMain.style.display = mainDisplay; hiddenMain = null; }
@@ -3627,6 +4017,6 @@
         }, 1000);
         reconcile();
     }
-    function boot() { initGithubTokenMenu(); initLoginPage(); }
+    function boot() { initPythonBridge(); initGithubTokenMenu(); initLoginPage(); }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
