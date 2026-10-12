@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.3.1
+// @version      1.3.6
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -40,8 +40,8 @@
     // repliesPerSubmit：每个首次阅读主题独立抽取整数上限（包含区间两端）。
     // 未读帖子不足时按实际数量提交；含首帖，不是发布回复。
     const MODE_SETTINGS = {
-        daily: { minutes: 3,   topicIntervalSec: [8, 15], replyIntervalSec: [8, 15], repliesPerSubmit: [40, 100], likes: [0, 1] }, // 日常维护
-        fast:  { minutes: 10,  topicIntervalSec: [8, 15], replyIntervalSec: [8, 15], repliesPerSubmit: [40, 100], likes: [0, 1] }, // 快速升级
+        daily: { minutes: 3,   topicIntervalSec: [6, 10], replyIntervalSec: [6, 10], repliesPerSubmit: [40, 100], likes: [0, 1] }, // 日常维护
+        fast:  { minutes: 10,  topicIntervalSec: [6, 10], replyIntervalSec: [6, 10], repliesPerSubmit: [40, 100], likes: [0, 1] }, // 快速升级
         idle:  { minutes: 500, topicIntervalSec: [20, 80], replyIntervalSec: [20, 80], repliesPerSubmit: [15, 35], likes: [0, 0] } // 日常挂机
     };
     // 所有论坛请求（含登录、主题详情、点赞）的最小间隔；避免只限制上传、读取却过密。
@@ -61,7 +61,7 @@
     // 面板尺寸（像素）。
     const UI = {
         WIDTH: 265,
-        HEIGHT: 132,
+        HEIGHT: 129,
         COLLAPSED_HEIGHT: 31,
         PAD_X: 8
     };
@@ -188,7 +188,10 @@
             let clock = timing ? submissionClock(timing.key) : {};
             next = Math.max(next, timing ? submissionDue(clock, timing) : 0);
             const delay = Math.max(0, next - Date.now());
-            if (delay) await paceWait(Math.min(delay, pace.deadline ? Math.max(0, pace.deadline - Date.now()) : delay), signal);
+            if (delay) {
+                if (timing && running) { runStage = "等待提交 · " + (delay / 1000).toFixed(1) + " 秒"; render(); }
+                await paceWait(Math.min(delay, pace.deadline ? Math.max(0, pace.deadline - Date.now()) : delay), signal);
+            }
             check();
             const at = Date.now();
             localStorage.setItem(FORUM_PACE.nextKey, String(at + (pace.gapMs || FORUM_PACE.gapMs)));
@@ -200,10 +203,10 @@
                 localStorage.setItem(timing.key, JSON.stringify(clock));
                 if (pace.onDispatch) pace.onDispatch();
             }
-            // 仅保存本次运行最近 200 次请求的时间与状态；不记录请求头、正文或账号凭据。
+            // 保存最近 600 次请求时间与状态，覆盖完整快速模式；不记录请求头、正文或凭据。
             const evidence = pace.deadline && running ? { at: at, method: String(opts.method || "GET").toUpperCase(),
                 path: new URL(url, location.href).pathname, stage: runStage, status: null } : null;
-            if (evidence) { requestEvidence.push(evidence); if (requestEvidence.length > 200) requestEvidence.shift(); }
+            if (evidence) { requestEvidence.push(evidence); if (requestEvidence.length > 600) requestEvidence.shift(); }
             try {
                 const response = await fetchRawTimed(url, opts);
                 if (evidence) { evidence.status = response.status; evidence.durationMs = Date.now() - at; }
@@ -1807,7 +1810,7 @@
     // 论坛：三种模式、等级/积分、点赞与邀请。
     const COMMON = {
         MSECS_MIN: 800, MSECS_MAX: 1400,
-        MAX_BATCH: 60, // 读取接口的分页大小，与单次上传数量无关。
+        MAX_BATCH: 100, // 仅补齐本批缺少的帖子；40–100 篇通常只需一次补齐请求。
         HARD_BLOCK_RETRY_THRESHOLD: 600,
         LIKE_REACTION: "heart"
     };
@@ -1843,13 +1846,32 @@
     function terminalRunError(e) {
         return abort || ["AbortError", "RunDeadlineError", "ForumChallengeError"].indexOf(e && e.name) >= 0;
     }
+    let forumReadChecks = 0;
+    function forumClientHeaders(extra) {
+        const headers = Object.assign({}, extra || {}, {
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest"
+        });
+        // 与论坛实际 XHR 的登录请求头保持一致；不在只读复核中附加访问登记头。
+        if (me.username) {
+            headers["Discourse-Logged-In"] = "true";
+            headers["Discourse-Present"] = "true";
+        }
+        const token = csrf || csrfMeta();
+        if (token) headers["X-CSRF-Token"] = token;
+        return headers;
+    }
     async function engineFetch(url, options) {
         if (abort) throw new DOMException("已停止", "AbortError");
         if (running && elapsed() >= totalMs()) { stopEngine("已到设定运行时间", "timeout"); throw deadlineError(); }
         const opts = Object.assign({}, options || {}, { signal: engineController ? engineController.signal : undefined });
+        opts.headers = forumClientHeaders(opts.headers);
         opts.ldhPace = Object.assign({}, opts.ldhPace || {}, { gapMs: FORUM_PACE.gapMs, deadline: startedAt + totalMs() });
         const target = new URL(url, location.href);
         const readOnly = String(opts.method || "GET").toUpperCase() === "GET" && target.searchParams.get("track_visit") !== "true";
+        const canCheckChallenge = String(opts.method || "GET").toUpperCase() === "GET" && !isForumSessionProbe(url, opts);
+        if (canCheckChallenge) forumReadChecks++;
+        try {
         // 只有读取能在原截止时间内重试一次；访问登记、阅读 POST、点赞 PUT 均不自动重发。
         for (let attempt = 0; ; attempt++) {
             let response;
@@ -1861,7 +1883,26 @@
             }
             if ([401, 403, 429].indexOf(response.status) >= 0 || /text\/html/i.test(response.headers.get("content-type") || "") || response.headers.get("cf-mitigated") === "challenge") {
                 const body = await response.clone().text();
-                if (isForumChallenge(response, body)) stopEngine(forumChallengeError().message, "challenge");
+                if (isForumChallenge(response, body)) {
+                    if (canCheckChallenge && !abort && totalMs() - elapsed() > FORUM_PACE.gapMs) {
+                        // 单个主题可能被挑战，但会话仍正常。只复核会话，不重发被拦截的资源。
+                        runStage = "部分接口需验证，正在复核登录"; render();
+                        const confirmed = await getUser(opts.signal);
+                        if (!abort && confirmed.username && normUser(confirmed.username) === normUser(me.username) && !forumChallenge()) {
+                            const error = new Error("此资源需要 CF 验证；会话复核正常，已跳过并继续其他主题");
+                            error.name = "ResourceChallengeError";
+                            throw error;
+                        }
+                        if (!abort && confirmed.username && normUser(confirmed.username) !== normUser(me.username)) {
+                            stopEngine("当前账号已变化，已停止本轮", "account_changed");
+                        } else if (!abort && accountState === "anonymous") {
+                            stopEngine("登录已失效，已停止请求。", "unauthenticated");
+                        } else if (!abort && accountState === "rate_limited") {
+                            stopEngine(accountError || "会话接口限流，已停止请求。", "rate_limited");
+                        }
+                    }
+                    if (!abort) stopEngine(forumChallengeError().message, "challenge");
+                }
                 else if (response.status === 429) stopEngine(forumRateNotice(response, url, (opts.method || "GET").toUpperCase(), body), "rate_limited");
                 else if (response.status === 401) stopEngine("登录已失效，已停止请求。", "unauthenticated");
                 // 普通 403 只代表本接口被拒绝，由主题或点赞流程跳过；CF 403 已在上面处理。
@@ -1871,6 +1912,9 @@
                 await sleep(2000); continue;
             }
             return response;
+        }
+        } finally {
+            if (canCheckChallenge) forumReadChecks--;
         }
     }
     function stopEngine(reason, kind) {
@@ -1895,6 +1939,7 @@
     const processedTopics = new Set();
     let forumStableAt = 0, forumAuthAt = 0, sideAllowed = false;
     function managedByPython() { return sessionStorage.getItem("ldh_python_managed") === "1"; }
+    function forumOnly() { return sessionStorage.getItem("ldh_forum_only") === "1"; }
     function forumSurfaceReady() {
         const app = !!document.querySelector("#main-outlet,.topic-list,.topic-body");
         const blocking = /Just a moment|Checking your browser|正在验证|请稍候/i.test(document.title) ||
@@ -1902,20 +1947,20 @@
         return app && !blocking && !forumChallenge() && accountState === "authenticated";
     }
     function forumSideReady() {
-        return location.hostname === "linux.do" && forumSurfaceReady() && forumStableAt > 0 &&
+        return !forumOnly() && location.hostname === "linux.do" && forumSurfaceReady() && forumStableAt > 0 &&
             Date.now() - forumStableAt >= 8000 && forumAuthAt > 0 && (!managedByPython() || sideAllowed);
     }
     function publishHealth() {
         const ready = forumSurfaceReady();
         if (!ready) { forumStableAt = 0; sideAllowed = false; }
         else if (!forumStableAt) forumStableAt = Date.now();
-        if (running && (!ready && (forumChallenge() || document.querySelector("#challenge-form,#cf-challenge-running")))) stopEngine(forumChallengeError().message,"challenge");
+        if (running && !ready && ((!forumReadChecks && forumChallenge()) || document.querySelector("#challenge-form,#cf-challenge-running"))) stopEngine(forumChallengeError().message,"challenge");
         const last = readJson("ld_helper_last",null);
-        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.1",user:me.username,
+        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.6",user:me.username,
             account:accountState,ready:ready && Date.now()-forumStableAt>=8000,challenge:!!forumChallenge(),
             holdUntil:0,running:running,startedAt:startedAt,deadline:startedAt+totalMs(),
             sent:Object.assign({},sent),settings:runSettings ? Object.assign({},runSettings) : null,
-            success:anyActionDone(),warningCount:runWarnings.length,stage:runStage,error:accountError,sideReady:forumSideReady(),last:last}));
+            success:anyActionDone(),warningCount:runWarnings.length,stage:runStage,error:accountError,sideReady:forumSideReady(),forumOnly:forumOnly(),last:last}));
     }
     function initPythonBridge() {
         document.addEventListener("ldh-command",function(e){
@@ -1923,7 +1968,7 @@
             if(cmd.action==="start")startMode(cmd.mode||"daily");
             else if(cmd.action==="stop")stopEngine("Python 请求停止","stopped");
             else if(cmd.action==="probe"&&!running)refreshForumUser(true);
-            else if(cmd.action==="side"&&forumSurfaceReady()){
+            else if(cmd.action==="side"&&!forumOnly()&&forumSurfaceReady()){
                 sideAllowed=true;
                 if(forumSideReady()){sync();refreshCredit(false).then(function(){if(forumSideReady())return runArCheckin(false);}).catch(function(){});}
             }
@@ -2249,7 +2294,10 @@
     async function getUser(signal) {
         accountError = "";
         try {
-            const r = await fetchTimed("/session/current.json", { signal: signal, credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+            const r = await fetchTimed("/session/current.json", { signal: signal,
+                ldhPace: running ? { deadline: startedAt + totalMs() } : {},
+                credentials: "same-origin", cache: "no-store", headers: running ? forumClientHeaders() :
+                    { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
             const body = await r.text();
             if (!r.ok) {
                 let detail = "";
@@ -2294,7 +2342,8 @@
         const malformed = values.some(function (v) { return v !== null && (!Number.isInteger(Number(v)) || Number(v) < 0 || typeof v === "boolean"); });
         const lastRead = Math.max(0, Number(t.last_read_post_number) || 0, Number(u.last_read_post_number) || 0);
         const visited = t.visited === true || t.seen === true || !!t.last_visited_at || !!t.first_visited_at || !!u.last_visited_at || !!u.first_visited_at;
-        return { lastRead: lastRead, fresh: !malformed && !visited && lastRead === 0 && (hasRead || t.unseen === true), visited: visited, malformed: malformed };
+        return { lastRead: lastRead, fresh: !malformed && !visited && lastRead === 0 && (hasRead || t.unseen === true),
+            visited: visited, malformed: malformed, historyKnown: values.length > 0 };
     }
     function topicReplyCount(topic) {
         const count = topic && topic.posts_count;
@@ -2309,6 +2358,7 @@
     }
     async function enterTopic(candidate) {
         const id = candidate.id;
+        runStage = "读取主题 " + id; render();
         // 检查本身不登记访问，避免候选复核污染主题统计。
         const r = await engineFetch("/t/" + id + ".json", { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
         if (r.status === 404 || r.status === 410) return { ok: false };
@@ -2319,14 +2369,20 @@
         const posts = (d.post_stream || {}).posts || [];
         const postCache = candidate.postCache || new Map();
         posts.forEach(function (p) { postCache.set(String(p.id), p); });
-        // 详情接口可能不返回阅读历史字段；首次证据来自列表，详情只排除冲突和已读帖。
-        return { ok: true, fresh: candidate.fresh && !state.malformed && !state.visited && state.lastRead === 0 && !local && !posts.some(function (p) { return p.read === true; }),
+        // Discourse 仅在已有 topic_user 时返回详情的 last_read_post_number。
+        // 列表的 unseen=false 只表示没有“新主题”徽标，不能据此判为读过。
+        // 历史字段缺失的候选必须在详情再次确认无历史，且首帖和返回的帖子明确未读。
+        const verifiedMissingHistory = candidate.verifyHistory && !state.historyKnown &&
+            posts.some(function (p) { return p.post_number === 1 && p.read === false; }) &&
+            posts.length > 0 && posts.every(function (p) { return p.read === false; });
+        return { ok: true, fresh: (candidate.fresh || verifiedMissingHistory) && !state.malformed && !state.visited && state.lastRead === 0 && !local && !posts.some(function (p) { return p.read === true; }),
             lastRead: Math.max(candidate.lastRead, state.lastRead, Number(local && local.lastRead) || 0),
             highest: Number(d.highest_post_number || d.posts_count || 0),
             posts: posts, postCache: postCache, stream: (d.post_stream || {}).stream || [] };
     }
     async function trackTopicVisit(id) {
         // 复核通过且确有可读帖子后，才保留原脚本的访问登记。
+        runStage = "登记主题 " + id; render();
         const r = await engineFetch("/t/" + id + ".json?track_visit=true", { credentials: "same-origin", cache: "no-store", headers: {
             "Accept": "application/json", "X-Requested-With": "XMLHttpRequest", "Discourse-Logged-In": "true",
             "Discourse-Present": "true", "Discourse-Track-View": "true", "Discourse-Track-View-Topic-Id": String(id), "X-CSRF-Token": csrf
@@ -2340,7 +2396,9 @@
         const numbers = new Set();
         for (let i = 0; i < ids.length && numbers.size < limit && !abort; i++) {
             if (!meta.postCache.has(ids[i])) {
-                const missing = ids.slice(i, i + COMMON.MAX_BATCH).filter(function (pid) { return !meta.postCache.has(pid); });
+                const missing = ids.slice(i).filter(function (pid) { return !meta.postCache.has(pid); })
+                    .slice(0, Math.min(COMMON.MAX_BATCH, limit - numbers.size));
+                runStage = "读取未读帖子 · " + numbers.size + "/" + limit; render();
                 const query = new URLSearchParams();
                 missing.forEach(function (pid) { query.append("post_ids[]", pid); });
                 const r = await engineFetch("/t/" + id + "/posts.json?" + query.toString(), { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
@@ -2480,7 +2538,9 @@
             }
             runStage = "查找未读主题 · " + source.name + " 第" + (source.page + 1) + "页";
             render();
-            const url = source.path + (source.path.indexOf("?") >= 0 ? "&" : "?") + "per_page=50&page=" + source.page;
+            // 服务端先过滤；仍在列表和详情复核，防止本站配置变化或删帖造成误入。
+            const url = source.path + (source.path.indexOf("?") >= 0 ? "&" : "?") +
+                "per_page=50&min_posts=" + (MIN_TOPIC_REPLIES_EXCLUSIVE + 2) + "&page=" + source.page;
             let result;
             try { result = await listTopics(url); }
             catch (e) {
@@ -2509,10 +2569,11 @@
                 const lastRead = Math.max(state.lastRead, Number(local && local.lastRead) || 0);
                 const highest = Number(t.highest_post_number || t.posts_count || 0);
                 const fresh = state.fresh && !local;
-                if (!fresh && lastRead === 0) { pool.unknown++; return; }
+                const verifyHistory = !fresh && !local && !state.historyKnown && !state.malformed && !state.visited && lastRead === 0;
+                if (!fresh && !verifyHistory && lastRead === 0) { pool.unknown++; return; }
                 if (highest <= lastRead) { pool.skipped++; return; }
-                const candidate = { id: id, fresh: fresh, lastRead: lastRead, source: source.name };
-                if (fresh) pool.fresh.push(candidate);
+                const candidate = { id: id, fresh: fresh, verifyHistory: verifyHistory, lastRead: lastRead, source: source.name };
+                if (fresh || verifyHistory) pool.fresh.push(candidate);
                 else { pool.skipped++; }
             });
         }
@@ -2673,7 +2734,7 @@
         if (engineController) { engineController.abort(); engineController = null; }
         wakeAll(); frozenTimer = "⏱ " + mmss(used); endNote = note || ""; activeMode = "";
         document.documentElement.removeAttribute("data-ldh-run-until");
-        writeJson("ld_helper_last", { version: "1.3.1", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
+        writeJson("ld_helper_last", { version: "1.3.6", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
             warnings: runWarnings.slice(), settings: Object.assign({}, runSettings), sent: Object.assign({}, sent), batches:batchEvidence.slice(), requests:requestEvidence.slice(),
             scan: { pages: pool.pages, skipped: pool.skipped, unknown: pool.unknown, filteredReplies: pool.filteredReplies, minRepliesExclusive: MIN_TOPIC_REPLIES_EXCLUSIVE }, frozen: frozenTimer, endNote: endNote });
         restoreButtons(); resumeIdleWork(); render();
@@ -2842,6 +2903,7 @@
     }
     function rowsForPanel() {
         if (!me.username) return ["登录后显示等级与阅读进度", "三个模式均可设置间隔、上传量和时间"];
+        if (forumOnly()) return ["仅论坛模式 · 等级/摘要已跳过", ""];
 
         if (isLowTL()) {
             if (summary) {
@@ -2883,6 +2945,7 @@
 
     function ldcSpan() {
         if (!me.username) return "";
+        if (forumOnly()) return '<span style="color:#aaa;" title="本次由 BAT 运行，仅处理论坛阅读/点赞">' + SP3 + "LDC：跳过</span>";
         const base = '<span id="ldh_ldc" style="cursor:pointer;';
 
         if (!oauthRetrying && getNoOauth(me.username)) {
@@ -2899,6 +2962,7 @@
 
     function arSpan() {
         if (!me.username) return "";
+        if (forumOnly()) return '<span style="color:#aaa;" title="本次由 BAT 运行，仅处理论坛阅读/点赞">' + SP3 + "Agent：跳过</span>";
         const base = '<span id="ldh_arbal" style="cursor:pointer;';
         if (!oauthRetrying && getNoOauth(me.username)) {
             return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "，已停止请求。点标题栏 ⟳ 可强制重试一次") + '">' + SP3 + "Agent：失败</span>";
@@ -2922,6 +2986,7 @@
 
     const ERR_MAXLEN = 22;
     function collectErrors() {
+        if (forumOnly()) return [];
         const list = [];
 
         if (arState === "fail") list.push({ t: "Agent：" + (arText || "签到失败"), full: arText || "签到失败" });
@@ -2980,6 +3045,14 @@
             const rows = rowsForPanel();
             document.getElementById("ldh_r2").innerHTML = rows[0];
             document.getElementById("ldh_r3").innerHTML = rows[1];
+        }
+
+
+        const statusRow = document.getElementById("ldh_r3");
+        if (running || finishedOnce && endNote) {
+            const statusText = running ? runStage || "正在准备" : endNote;
+            statusRow.textContent = statusText;
+            statusRow.title = statusText + (running && runWarnings.length ? "\n最近提示：" + runWarnings[runWarnings.length - 1].message : "");
         }
 
         const r4 = document.getElementById("ldh_r4");
@@ -3048,7 +3121,7 @@
         if (body) body.style.display = collapsed ? "none" : "block";
         if (ic) ic.textContent = collapsed ? "＋" : "－";
         if (p) {
-            p.style.height = (collapsed ? UI.COLLAPSED_HEIGHT : UI.HEIGHT) + "px";
+            p.style.height = collapsed ? UI.COLLAPSED_HEIGHT + "px" : "auto";
             if (composerMin) {
                 p.style.transform = "none";
                 const r = p.getBoundingClientRect();
@@ -3362,12 +3435,13 @@
             const saved = loadArNote();
             if (saved && arState !== "running") { arState = saved.state; arText = saved.text; arBal = saved.bal; }
             render();
+            if (forumOnly()) return;
             if (isLowTL()) loadSummary(false);
             else {
                 const cached = readTL3();
                 if (!cached || Date.now() - Number(cached.at || 0) > SYNC_THROTTLE_MS) sync();
             }
-            if (!managedByPython()) {
+            if (!managedByPython() && !forumOnly()) {
                 let checks=0;
                 const sideWait=setInterval(function(){
                     if(normUser(me.username)!==user || ++checks>60){clearInterval(sideWait);return;}
@@ -3386,7 +3460,7 @@
 
         p.style.cssText = "position:fixed;bottom:18px;left:16px;z-index:999999;background:rgba(18,18,18,0.86);color:#fff;" +
             "padding:2px " + UI.PAD_X + "px 9px " + UI.PAD_X + "px;border-radius:9px;width:" + UI.WIDTH + "px;box-sizing:border-box;" +
-            "max-width:calc(100vw - 32px);height:" + UI.HEIGHT + "px;max-height:calc(100dvh - 36px);display:flex;flex-direction:column;" +
+            "max-width:calc(100vw - 32px);" +
             "font-size:10px;line-height:14px;box-shadow:0 6px 16px rgba(0,0,0,0.4);overflow:visible;";
         const rowCss = "white-space:nowrap;text-overflow:ellipsis;overflow:hidden;height:14px;min-height:14px;line-height:14px;";
         const btnCss = "flex:1;padding:8px 2px;border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:11px;line-height:14px;box-sizing:border-box;white-space:nowrap;";
@@ -3402,7 +3476,7 @@
             '<span id="ldh_min" style="cursor:pointer;margin-left:6px;font-size:12px;color:#ccc;">－</span>' +
             '</span>' +
             '</div>' +
-            '<div id="ldh_body" style="flex:1;min-height:0;overflow:auto;">' +
+            '<div id="ldh_body">' +
             '<div style="display:flex;gap:5px;margin:3px 0 7px 0;">' +
             '<button id="ldh_daily" style="' + btnCss + 'background:' + MODES.daily.color + ';">日常维护</button>' +
             '<button id="ldh_fast"  style="' + btnCss + 'background:' + MODES.fast.color + ';">快速升级</button>' +
@@ -3840,6 +3914,7 @@
         function status(message, error) {
             const el = root.getElementById("ldh_login_status");
             el.textContent = message;
+            el.title = message;
             el.style.color = error ? "#ffb4ab" : "#b7e6c5";
         }
         function setBusy(value) {
@@ -3927,7 +4002,7 @@
             root.innerHTML = '<style>' +
                 ':host{color-scheme:dark}*{box-sizing:border-box}[hidden]{display:none!important}' +
                 'section{font:10px/14px system-ui,sans-serif;color:#fff;background:#202923;border:1px solid #51705b;' +
-                'height:' + UI.HEIGHT + 'px;max-height:calc(100dvh - 36px);display:flex;flex-direction:column;' +
+                'height:' + UI.HEIGHT + 'px;display:flex;flex-direction:column;' +
                 'border-radius:9px;box-shadow:0 4px 18px #0005;overflow:hidden;overflow-wrap:anywhere}' +
                 'section[data-collapsed="true"]{height:' + UI.COLLAPSED_HEIGHT + 'px}' +
                 'header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:6px;height:27px;padding:2px ' + UI.PAD_X + 'px}' +
@@ -3935,11 +4010,11 @@
                 'button{background:#347b48;color:#fff;border:1px solid #6b9977;padding:3px 5px;cursor:pointer}' +
                 'button:disabled,input:disabled{opacity:.55;cursor:wait}button:focus-visible,input:focus-visible{outline:2px solid #b7e6c5;outline-offset:1px}' +
                 '#ldh_login_toggle{flex:none;padding:1px 5px;background:transparent}' +
-                '#ldh_login_body{flex:1;min-height:0;overflow:auto;padding:0 ' + UI.PAD_X + 'px 7px}.row{display:flex;gap:5px;align-items:center}' +
+                '#ldh_login_body{flex:1;min-height:0;padding:0 ' + UI.PAD_X + 'px 7px}.row{display:flex;gap:5px;align-items:center}' +
                 'input{flex:1 1 52px;width:64px;background:#fff;color:#17241b;border:1px solid #b6c6bb;padding:3px 5px}' +
                 '#ldh_login_fetch{flex:none;white-space:nowrap}' +
                 '#ldh_login_btn{width:100%;margin-top:5px;background:#384c3e}' +
-                '#ldh_login_status{margin:5px 0 0;font-size:10px;line-height:14px;color:#b7e6c5}' +
+                '#ldh_login_status{margin:5px 0 0;font-size:10px;line-height:14px;color:#b7e6c5;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}' +
                 '</style><section aria-label="LINUX DO 登录助手">' +
                 '<header><strong>LINUX DO 登录助手</strong><button id="ldh_login_toggle" type="button" aria-controls="ldh_login_body" aria-expanded="true">收起</button></header>' +
                 '<div id="ldh_login_body"><div class="row">' +
