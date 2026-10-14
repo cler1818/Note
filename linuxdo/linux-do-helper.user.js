@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.3.6
+// @version      1.3.8
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -40,7 +40,7 @@
     // repliesPerSubmit：每个首次阅读主题独立抽取整数上限（包含区间两端）。
     // 未读帖子不足时按实际数量提交；含首帖，不是发布回复。
     const MODE_SETTINGS = {
-        daily: { minutes: 3,   topicIntervalSec: [6, 10], replyIntervalSec: [6, 10], repliesPerSubmit: [40, 100], likes: [0, 1] }, // 日常维护
+        daily: { minutes: 3,   topicIntervalSec: [6, 10], replyIntervalSec: [6, 10], repliesPerSubmit: [30, 60], likes: [0, 1] }, // 日常维护
         fast:  { minutes: 10,  topicIntervalSec: [6, 10], replyIntervalSec: [6, 10], repliesPerSubmit: [40, 100], likes: [0, 1] }, // 快速升级
         idle:  { minutes: 500, topicIntervalSec: [20, 80], replyIntervalSec: [20, 80], repliesPerSubmit: [15, 35], likes: [0, 0] } // 日常挂机
     };
@@ -284,7 +284,7 @@
 
         AUTOKEY: "ar_auto_login_ts",
         SIDEKEY: "ar_side_login_v1",
-        TAB_TIMEOUT: 30 * 1000
+        TAB_TIMEOUT: 90 * 1000
     };
     const ANY = {
         HOST: "https://anyrouter.top",
@@ -301,11 +301,11 @@
         SCOPE: "openid profile email",
         BALPREFIX: "credit_bal_",
         API_TIMEOUT: 8000,
-        TAB_TIMEOUT: 30 * 1000
+        TAB_TIMEOUT: 90 * 1000
     };
 
     const TABLOCK_KEY = "ldh_fg_tab_lock";
-    const TABLOCK_TTL = 40 * 1000;
+    const TABLOCK_TTL = 120 * 1000;
     function acquireTabLock() {
         const now = Date.now(), cur = Number(gmGet(TABLOCK_KEY, 0)) || 0;
         if (now - cur < TABLOCK_TTL) return false;
@@ -1956,7 +1956,7 @@
         else if (!forumStableAt) forumStableAt = Date.now();
         if (running && !ready && ((!forumReadChecks && forumChallenge()) || document.querySelector("#challenge-form,#cf-challenge-running"))) stopEngine(forumChallengeError().message,"challenge");
         const last = readJson("ld_helper_last",null);
-        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.6",user:me.username,
+        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.8",user:me.username,
             account:accountState,ready:ready && Date.now()-forumStableAt>=8000,challenge:!!forumChallenge(),
             holdUntil:0,running:running,startedAt:startedAt,deadline:startedAt+totalMs(),
             sent:Object.assign({},sent),settings:runSettings ? Object.assign({},runSettings) : null,
@@ -2111,7 +2111,6 @@
         return creditJob;
     }
     async function refreshCreditOnce(manual) {
-        if (idleSuspended && !manual) return;
         const u = me.username;
         if (!u) return;
 
@@ -2163,7 +2162,7 @@
 
     async function fetchSummary(username) {
         const r = await fetchTimed("/u/" + encodeURIComponent(username) + "/summary.json", {
-            credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
+            credentials: "same-origin", cache: "no-store", headers: forumClientHeaders()
         });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const b = await r.json();
@@ -2251,7 +2250,7 @@
                 syncAt = Date.now(); syncState = "ok"; render();
                 try { if (handle.close) handle.close(); } catch (_) {}
             }
-            else if (n > 14) { clearInterval(iv); try { if (handle.close) handle.close(); } catch (_) {} syncState = "empty"; render(); }
+            else if (n > 60) { clearInterval(iv); try { if (handle.close) handle.close(); } catch (_) {} syncState = "empty"; render(); }
         }, 1500);
     }
 
@@ -2734,7 +2733,7 @@
         if (engineController) { engineController.abort(); engineController = null; }
         wakeAll(); frozenTimer = "⏱ " + mmss(used); endNote = note || ""; activeMode = "";
         document.documentElement.removeAttribute("data-ldh-run-until");
-        writeJson("ld_helper_last", { version: "1.3.6", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
+        writeJson("ld_helper_last", { version: "1.3.8", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
             warnings: runWarnings.slice(), settings: Object.assign({}, runSettings), sent: Object.assign({}, sent), batches:batchEvidence.slice(), requests:requestEvidence.slice(),
             scan: { pages: pool.pages, skipped: pool.skipped, unknown: pool.unknown, filteredReplies: pool.filteredReplies, minRepliesExclusive: MIN_TOPIC_REPLIES_EXCLUSIVE }, frozen: frozenTimer, endNote: endNote });
         restoreButtons(); resumeIdleWork(); render();
@@ -2801,8 +2800,6 @@
         if(!forumSideReady())return Promise.resolve();
         if (!me.username) return Promise.resolve();
         if (arState === "running") return Promise.resolve();
-        if (idleSuspended && !force) return Promise.resolve();
-
         if (!force && getNoOauth(me.username)) {
             arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
             return Promise.resolve();
@@ -2904,7 +2901,6 @@
     function rowsForPanel() {
         if (!me.username) return ["登录后显示等级与阅读进度", "三个模式均可设置间隔、上传量和时间"];
         if (forumOnly()) return ["仅论坛模式 · 等级/摘要已跳过", ""];
-
         if (isLowTL()) {
             if (summary) {
                 return [
@@ -3018,20 +3014,12 @@
         const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), totalMs())) : frozenTimer;
 
         const nameHtml = me.username ? esc(me.username) : '<span style="color:#ff8a8a;">' + esc(accountLabel()) + "</span>";
-        if (running) {
-            let t = document.getElementById("ldh_timer");
-            if (t) { t.textContent = timer; }
-            else {
-                r1.innerHTML = nameHtml + tlBadge() + ldcSpan() + arSpan() +
-                    '<span id="ldh_timer" style="float:right;color:#8fe0b0;margin-left:8px;">' + timer + "</span>";
-            }
-        } else {
-            r1.innerHTML = nameHtml + tlBadge() + ldcSpan() + arSpan() +
+        const accountHtml = nameHtml + tlBadge() + ldcSpan() + arSpan();
+        const timerElement = document.getElementById("ldh_timer");
+        if (!timerElement || r1._ldhAccountHtml !== accountHtml) {
+            r1.innerHTML = accountHtml +
                 '<span id="ldh_timer" style="float:right;color:#8fe0b0;margin-left:8px;">' + timer + "</span>";
-
-            if (getNoOauth(me.username)) r1.setAttribute("data-nooauth", "1");
-            else r1.removeAttribute("data-nooauth");
-
+            r1._ldhAccountHtml = accountHtml;
             const bindLdc = document.getElementById("ldh_ldc");
             if (bindLdc) bindLdc.addEventListener("click", function () { refreshCredit(true); });
             const bindAr = document.getElementById("ldh_arbal");
@@ -3039,24 +3027,20 @@
 
                 runArCheckin(arState !== "pending");
             });
+        } else {
+            timerElement.textContent = timer;
         }
+        if (getNoOauth(me.username)) r1.setAttribute("data-nooauth", "1");
+        else r1.removeAttribute("data-nooauth");
 
-        if (!running) {
-            const rows = rowsForPanel();
-            document.getElementById("ldh_r2").innerHTML = rows[0];
-            document.getElementById("ldh_r3").innerHTML = rows[1];
-        }
-
-
-        const statusRow = document.getElementById("ldh_r3");
-        if (running || finishedOnce && endNote) {
-            const statusText = running ? runStage || "正在准备" : endNote;
-            statusRow.textContent = statusText;
-            statusRow.title = statusText + (running && runWarnings.length ? "\n最近提示：" + runWarnings[runWarnings.length - 1].message : "");
-        }
+        const rows = rowsForPanel();
+        document.getElementById("ldh_r2").innerHTML = rows[0];
+        document.getElementById("ldh_r3").innerHTML = rows[1];
 
         const r4 = document.getElementById("ldh_r4");
         r4.title = (runSettings ? "本次：主题间隔 " + runSettings.topicIntervalSec.join("–") + " 秒，回复间隔 " + runSettings.replyIntervalSec.join("–") + " 秒，每个主题随机抽取 " + runSettings.repliesPerSubmit.join("–") + " 篇上限（不足按实际），点赞上限 " + runSettings.likes + " 次（配置 " + runSettings.likesRange.join("–") + "），运行 " + runSettings.minutes + " 分钟。\n" : "") + "首读＝没有历史阅读记录的候选首次提交成功；帖＝实际返回的未读帖子提交成功（含首帖）。处理主题 " + sent.processed + "；实际升级增量以论坛同步为准。" + (endNote ? "\n" + endNote : "");
+        if (running) r4.title += "\n当前：" + (runStage || "正在准备");
+        if (runWarnings.length) r4.title += "\n最近提示：" + runWarnings[runWarnings.length - 1].message;
         const notice = document.getElementById("ldh_notice");
         if (notice) { notice.textContent = ""; notice.hidden = true; }
         if (running || finishedOnce) {
