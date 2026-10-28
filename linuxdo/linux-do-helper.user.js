@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.3.8
+// @version      1.3.9
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
 // @downloadURL  https://github.com/cler1818/Note/raw/refs/heads/main/linuxdo/linux-do-helper.user.js
 // @updateURL    https://github.com/cler1818/Note/raw/refs/heads/main/linuxdo/linux-do-helper.user.js
+// @match        https://challenges.cloudflare.com/*
 // @match        https://linux.do/*
 // @match        https://connect.linux.do/*
 // @match        https://credit.linux.do/*
@@ -15,6 +16,7 @@
 // @match        https://newassets.hcaptcha.com/captcha/v1/*/static/hcaptcha.html*
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_listValues
 // @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
@@ -27,11 +29,77 @@
 // @connect      agentrouter.org
 // @connect      api.github.com
 // @connect      any.909724.xyz
-// @run-at       document-end
+// @run-at       document-start
 // ==/UserScript==
 
-(function () {
+(function linuxDoHelper() {
     "use strict";
+    if (location.hostname === "challenges.cloudflare.com") { cfCheckboxAssist(); return; }
+    if (document.readyState === "loading") { document.addEventListener("DOMContentLoaded", linuxDoHelper, { once: true }); return; }
+    function cfCheckboxAssist() {
+        // Run inside the genuine CF iframe; never click a guessed outer coordinate.
+        const roots = new Set([document]), started = Date.now();
+        let candidate = null, stableAt = 0, lastAttempt = 0, stopped = false;
+        const page = typeof unsafeWindow === "undefined" ? window : unsafeWindow;
+        const proto = page.Element?.prototype, original = proto?.attachShadow;
+        let capture = null;
+        if (original) {
+            try {
+                capture = function (options) { const root = original.call(this, options); roots.add(root); return root; };
+                proto.attachShadow = capture;
+            } catch (_) {}
+        }
+        function get(key, fallback) { try { return GM_getValue(key, fallback); } catch (_) { return fallback; } }
+        function set(key, value) { try { GM_setValue(key, value); } catch (_) {} }
+        const flows = [get("ar_tab_flow", null), get("ldh_credit_flow_v2", null)]
+            .filter(function (flow) { return flow?.id && Date.now() - (flow.ts || flow.startedAt) < 180000; })
+            .sort(function (a, b) { return (b.ts || b.startedAt) - (a.ts || a.startedAt); });
+        let referrer = "manual";
+        try { referrer = new URL(document.referrer).hostname; } catch (_) {}
+        const key = "ldh_cf_attempts_" + (flows[0]?.id || referrer);
+        function state() {
+            const row = get(key, null);
+            return row && Date.now() - row.startedAt < 180000 ? row : { startedAt: started, clicks: 0 };
+        }
+        function visible(el) {
+            const r = el.getBoundingClientRect(), style = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth &&
+                style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) !== 0;
+        }
+        function controls() {
+            const found = [];
+            for (const root of roots) {
+                for (const el of root.querySelectorAll("*")) if (el.shadowRoot) roots.add(el.shadowRoot);
+                for (const el of root.querySelectorAll('input[type="checkbox"]')) if (el.isConnected && visible(el)) found.push(el);
+            }
+            return found;
+        }
+        function stop() {
+            stopped = true; clearInterval(timer);
+            try { if (proto?.attachShadow === capture) proto.attachShadow = original; } catch (_) {}
+        }
+        function step() {
+            if (stopped || Date.now() - started > 180000) { stop(); return; }
+            const row = state(), items = controls();
+            if (items.some(function (el) { return el.checked; })) { set(key, Object.assign(row, { checked: true })); stop(); return; }
+            const el = items.find(function (item) { return !item.disabled && item.getAttribute("aria-disabled") !== "true"; });
+            if (!el || el !== candidate) { candidate = el; stableAt = Date.now(); return; }
+            if (row.clicks >= 2) { stop(); return; }
+            if (Date.now() - stableAt < 1000 || Date.now() - Math.max(lastAttempt, row.lastAttempt || 0) < 15000) return;
+            const fresh = state();
+            if (fresh.clicks >= 2) { stop(); return; }
+            lastAttempt = Date.now();
+            const clicks = fresh.clicks + 1;
+            set(key, Object.assign(fresh, { clicks: clicks, lastAttempt: lastAttempt }));
+            try { el.click(); } catch (_) {}
+            // A click is only an attempt. The parent must verify its real page/API response.
+            console.info("[LDH] CF 真实控件点击尝试 " + clicks + "/2；等待网站验证结果");
+        }
+        const timer = setInterval(step, 1000);
+        window.addEventListener("pagehide", stop, { once: true }); step();
+    }
+
+
     // ===== 三个按钮的运行参数：点击直接开始，只需修改这里 =====
     // minutes：运行分钟数；likes：[最少次数, 最多次数]，每次启动抽取一次整数上限。
     // likes 抽到 0 时不读取点赞名单、不发点赞请求；[0, 0] 表示始终不点赞。
@@ -284,7 +352,7 @@
 
         AUTOKEY: "ar_auto_login_ts",
         SIDEKEY: "ar_side_login_v1",
-        TAB_TIMEOUT: 90 * 1000
+        TAB_TIMEOUT: 180 * 1000
     };
     const ANY = {
         HOST: "https://anyrouter.top",
@@ -300,12 +368,13 @@
         REDIRECT: "https://credit.linux.do/login",
         SCOPE: "openid profile email",
         BALPREFIX: "credit_bal_",
+        FLOW: "ldh_credit_flow_v2",
         API_TIMEOUT: 8000,
-        TAB_TIMEOUT: 90 * 1000
+        TAB_TIMEOUT: 180 * 1000
     };
 
     const TABLOCK_KEY = "ldh_fg_tab_lock";
-    const TABLOCK_TTL = 120 * 1000;
+    const TABLOCK_TTL = 300 * 1000;
     function acquireTabLock() {
         const now = Date.now(), cur = Number(gmGet(TABLOCK_KEY, 0)) || 0;
         if (now - cur < TABLOCK_TTL) return false;
@@ -536,8 +605,143 @@
     function currentLdUser() { return normUser(gmGet(LD_USER_KEY, "")); }
 
     const NO_OAUTH_PREFIX = "ldh_no_oauth_";
+    const WEBSITE_SYNC = { endpoint: "https://any.909724.xyz/api/userscript-account-sync", admin: "https://any.909724.xyz/lzhp529",
+        key: "ldh_forum_sync_key", pending: "ldh_forum_sync_outbox_v1", entry: "ldh_forum_sync_entry_", recovery: "ldh_agent_recovery_" };
+    let websiteJob = null;
+    async function websiteRequest(payload) {
+        const key = String(gmGet(WEBSITE_SYNC.key, "") || gmGet("ldh_any_import_key", "") || "").trim();
+        const headers = { "Content-Type": "application/json" };
+        if (key) headers.Authorization = "Bearer " + key;
+        else {
+            const response = await gmFetch(WEBSITE_SYNC.admin, { timeout: 10000 });
+            const doc = new DOMParser().parseFromString(response.responseText || "", "text/html");
+            const csrf = doc.getElementById("arConfig")?.dataset.csrf;
+            if (!csrf) throw new Error("请在油猴菜单设置查询网站同步密钥，或登录管理网站后重试");
+            headers["X-CSRF-Token"] = csrf;
+        }
+        const response = await gmFetch(WEBSITE_SYNC.endpoint, { method: "POST", headers: headers, data: JSON.stringify(payload), timeout: 15000 });
+        let result;
+        try { result = JSON.parse(response.responseText || ""); } catch (_) { throw new Error("网站返回验证页面，完成验证后重试同步"); }
+        if (response.status < 200 || response.status >= 300 || !result?.ok) throw new Error(result?.message || "网站同步失败");
+        return result;
+    }
+    function websiteOutbox() {
+        const legacy = gmGet(WEBSITE_SYNC.pending, []);
+        if (Array.isArray(legacy) && legacy.length) {
+            legacy.forEach(function (row) { if (row?.id && row.patch) gmSet(WEBSITE_SYNC.entry + row.id, row); });
+            gmDel(WEBSITE_SYNC.pending);
+        }
+        return GM_listValues().filter(function (key) { return key.startsWith(WEBSITE_SYNC.entry); })
+            .map(function (key) { return gmGet(key, null); }).filter(function (row) { return row?.id && row.patch; })
+            .sort(function (a, b) { return a.patch.observed_at - b.patch.observed_at || a.id.localeCompare(b.id); });
+    }
+    function flushWebsiteOutbox() {
+        if (websiteJob) return websiteJob;
+        websiteJob = (async function () {
+            let result = null;
+            const attempted = new Set();
+            let failure = null;
+            for (let n = 0; n < 100; n++) {
+                const entry = websiteOutbox().find(function (row) { return !attempted.has(row.id); });
+                if (!entry) break;
+                attempted.add(entry.id);
+                try {
+                    result = await websiteRequest({ account_info: entry.patch });
+                    if (result.skipped?.includes("account_info")) throw new Error("网站账号身份已变更，请重新采集");
+                    gmDel(WEBSITE_SYNC.entry + entry.id);
+                } catch (error) { failure = error; }
+            }
+            if (failure) throw failure;
+            return result;
+        })().finally(function () { websiteJob = null; });
+        return websiteJob;
+    }
+    function queueForumPatch(username, values) {
+        const user = normUser(username);
+        if (!user) return Promise.reject(new Error("论坛用户名未确认"));
+        const patch = Object.assign({}, values, { username: user, login_status: "authenticated", observed_at: Date.now() });
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+        gmSet(WEBSITE_SYNC.entry + id, { id: id, patch: patch });
+        return flushWebsiteOutbox();
+    }
+    function publishAgentDenial(user, at) {
+        queueForumPatch(user, { no_oauth: true, oauth_at: at, agent_denied_reason: NO_OAUTH_TEXT }).catch(function () {});
+    }
+    async function syncAgentPolicy(username) {
+        const user = normUser(username);
+        try {
+            const state = await websiteRequest({ mode: "read", username: user });
+            if (normUser(currentLdUser()) !== user) return;
+            const local = getNoOauth(user), recovered = Number(gmGet(WEBSITE_SYNC.recovery + user, 0));
+            if (!state.oauth_at || state.oauth_at <= Math.max(local?.at || 0, recovered)) return;
+            if (state.no_oauth === true) saveNoOauth(user, "website", null, state.oauth_at, true);
+            else if (state.no_oauth === false) clearNoOauth(user, state.oauth_at);
+        } catch (_) {}
+    }
+    try { GM_registerMenuCommand("设置论坛资料同步密钥", function () {
+        const key = prompt("输入 Python 的网站同步密钥，也可使用已有查询网站导入密钥：", "");
+        if (key?.trim()) { gmSet(WEBSITE_SYNC.key, key.trim()); flushWebsiteOutbox().catch(function (error) { ldhToast(error.message, "error"); }); }
+    }); } catch (_) {}
+    setTimeout(function () { if (websiteOutbox().length) flushWebsiteOutbox().catch(function () {}); }, 3000);
+
+    function creditAccessKey(user) { return "ldh_credit_access_" + normUser(user); }
+    function creditAccess(user) { const row = gmGet(creditAccessKey(user), null); return row && row.username === normUser(user) ? row : null; }
+    function saveCreditAccess(user, status, error, at, currentLevel) {
+        const row = { username: normUser(user), status: status, error: error || "", at: at || Date.now(), currentLevel: currentLevel };
+        gmSet(creditAccessKey(user), row);
+        const patch = { ldc_status: status, ldc_status_at: row.at, ldc_error: row.error };
+        if (status === "level_required") patch.ldc_required_level = 3;
+        queueForumPatch(user, patch).catch(function () {});
+        return row;
+    }
+    function creditFlow() { const flow = gmGet(CREDIT.FLOW, null); return flow && Date.now() - flow.startedAt < CREDIT.TAB_TIMEOUT + 2000 ? flow : null; }
+    function updateCreditFlow(flow, values) {
+        const current = creditFlow();
+        if (!current || current.id !== flow.id) return false;
+        gmSet(CREDIT.FLOW, Object.assign({}, current, values)); return true;
+    }
+    function levelRequired(text) {
+        return String(text || "").replace(/\s+/g, " ").match(/你的信任等级\s*(\d+)\s*[，,]?\s*不满足该应用的要求/);
+    }
+    function auxiliaryChallenge() {
+        return !!document.querySelector("#challenge-form,#cf-challenge-running,#challenge-stage") ||
+            /Just a moment|Verifying you are human|正在验证|请稍[候后]/i.test(document.title || "");
+    }
+    function creditPageFlow() {
+        const queryId = new URLSearchParams(location.search).get("ldh_credit_flow");
+        if (queryId) sessionStorage.setItem("ldh_credit_flow", queryId);
+        const id = sessionStorage.getItem("ldh_credit_flow");
+        const flow = creditFlow();
+        if (!flow || flow.id !== id) return;
+        let busy = false, stopped = false;
+        async function step() {
+            if (stopped || !creditFlow() || creditFlow().id !== id) { clearInterval(timer); return; }
+            if (busy || auxiliaryChallenge() || document.readyState === "loading") return;
+            busy = true;
+            try {
+                const response = await fetch("/api/v1/oauth/user-info", { credentials: "include", cache: "no-store",
+                    headers: { "Accept": "application/json" }, signal: AbortSignal.timeout(10000) });
+                let body; try { body = await response.json(); } catch (_) { return; }
+                if (response.status === 401 || body?.error_msg === "未登录") {
+                    if (location.pathname !== "/login") location.replace(CREDIT.HOST + "/login?ldh_credit_auto=1&ldh_credit_flow=" + encodeURIComponent(id));
+                    return;
+                }
+                const user = body?.data, balance = Number(user?.available_balance);
+                if (!response.ok || body?.error_msg || !user?.id || !user?.username || user.available_balance == null || !Number.isFinite(balance) || balance < 0) return;
+                if (normUser(user.username) !== flow.username) {
+                    updateCreditFlow(flow, { status: "account_mismatch", error: "Credit 账号与当前论坛账号不一致", at: Date.now() });
+                } else {
+                    updateCreditFlow(flow, { status: "ok", username: normUser(user.username), userId: Number(user.id),
+                        balance: balance.toFixed(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""), at: Date.now() });
+                }
+                stopped = true; clearInterval(timer);
+            } catch (_) {} finally { busy = false; }
+        }
+        const timer = setInterval(step, 2000); step();
+    }
+
     const NO_OAUTH_TEXT = "你所在的用户组无法使用";
-    const NO_OAUTH_MSG = "该账号所在用户组无法使用 OAuth 授权";
+    const NO_OAUTH_MSG = "青春版：用户组无法使用 Agent，已停止自动请求";
     function noOauthKey(u) { return NO_OAUTH_PREFIX + normUser(u); }
     let _noOauthCache = { key: "", at: 0, v: null };
 
@@ -552,19 +756,21 @@
         return v;
     }
 
-    function saveNoOauth(u, from, tl) {
+    function saveNoOauth(u, from, tl, at, silent) {
         const name = normUser(u);
         if (!name) return;
         gmSet(noOauthKey(name), JSON.stringify({
-            locked: true, from: from || "", tl: (typeof tl === "number" ? tl : null), at: Date.now()
+            locked: true, agentOnly: true, from: from || "", tl: (typeof tl === "number" ? tl : null), at: at || Date.now()
         }));
         _noOauthCache = { key: "", at: 0, v: null };
-        console.warn("[LDH] @" + name + " 无 OAuth 权限，已永久停用 LDC/Agent/Any（来源:" + (from || "?") + "）");
+        if (!silent) publishAgentDenial(name, at || Date.now());
+        console.warn("[LDH] @" + name + " 已标青春版，停止自动 Agent，LDC 独立获取");
     }
-    function clearNoOauth(u) {
+    function clearNoOauth(u, at) {
         const name = normUser(u);
         if (!name) return;
         gmDel(noOauthKey(name));
+        gmSet(WEBSITE_SYNC.recovery + name, at || Date.now());
         _noOauthCache = { key: "", at: 0, v: null };
     }
     function noOauthError() { const e = new Error(NO_OAUTH_MSG); e.noOauth = true; return e; }
@@ -625,6 +831,19 @@
         return /not logged in|login has expired|login expired|please log in again|未登录|尚未登录|登录.{0,5}(失效|过期)|重新登录/i.test(String(message || ""));
     }
     async function arPageJson(path, headers) {
+        const until = Date.now() + AR.TAB_TIMEOUT;
+        let attempts = 0;
+        while (Date.now() < until) {
+            if (auxiliaryChallenge() || document.readyState === "loading") { await arWait(1000); continue; }
+            try { return await arPageJsonOnce(path, headers); }
+            catch (error) {
+                if (error.auth || error.status >= 400 && error.status < 500 && error.status !== 429 || ++attempts >= 3) throw error;
+                await arWait(2000 * attempts);
+            }
+        }
+        throw new Error("Agent 页面仍待验证，完成后重试");
+    }
+    async function arPageJsonOnce(path, headers) {
         const controller = new AbortController();
         const timer = setTimeout(function () { controller.abort(); }, 6000);
         let response, body;
@@ -732,16 +951,18 @@
             check();
         }
     }
-    function arFallbackTab(say, withLogout) {
+    function arFallbackTab(say, withLogout, manual) {
         return new Promise(function (resolve, reject) {
             const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
-            gmSet(AR.FLOW, { id: id, step: "start", ts: Date.now(), withLogout: !!withLogout });
+            gmSet(AR.FLOW, { id: id, step: "start", ts: Date.now(), withLogout: !!withLogout, manual: manual === true, expectedUser: currentLdUser() });
             markAutoLogin(AR.AUTOKEY);
             let handle = null, timer = null;
+            let finished = false;
             function finish(error, value) {
+                if (finished) return; finished = true;
                 clearInterval(timer);
                 if (arFlowCurrent(id)) gmDel(AR.FLOW);
-                try { if (handle) handle.close(); } catch (_) {}
+                try { if (!error && handle) handle.close(); } catch (_) {}
                 if (error) reject(error); else resolve(value);
             }
             try { if(location.hostname === "linux.do" && !forumSideReady())throw new Error("论坛未就绪，暂缓 Agent 授权"); handle = GM_openInTab(AR.HOST + "/?ar_auto=1", { active: true, insert: true, setParent: true }); }
@@ -763,9 +984,9 @@
         });
     }
     const AR_QPD_FALLBACK = 500000;
-    async function arWithPage(say, withLogout) {
+    async function arWithPage(say, withLogout, manual) {
         if (!acquireTabLock()) throw new Error("另一个标签正在授权，请等待完成后重试 Agent");
-        try { return await arFallbackTab(say || function () {}, withLogout); }
+        try { return await arFallbackTab(say || function () {}, withLogout, manual); }
         finally { releaseTabLock(); }
     }
     async function arBalance(userData) {
@@ -775,7 +996,7 @@
         if (!(perUnit > 0)) perUnit = AR_QPD_FALLBACK;
         return "$" + (Number(user.quota) / perUnit).toFixed(2);
     }
-    function arCheckin(say) { return arWithPage(say, true); }
+    function arCheckin(say, manual) { return arWithPage(say, true, manual); }
     // LDH_AGENT_SESSION_1110 END
 
     function anyGetFlow() {
@@ -1696,16 +1917,16 @@
     // Credit 页面。
     if (location.hostname === "credit.linux.do") {
 
+        creditPageFlow();
         (function creditAutoLogin() {
-            if (getNoOauth(currentLdUser())) return;
             const started = Date.now();
-            let termsDone = false, loginClicked = false, stopped = false;
+            let termsDone = false, loginClicked = false, stopped = false, loginAttempts = 0, loginAt = 0;
             const bg = document.visibilityState === "hidden";
             const seen = function (el) { return bg || el.getClientRects().length > 0; };
 
             function stop() { if (stopped) return; stopped = true; try { ob.disconnect(); } catch (_) {} clearInterval(iv); }
             function step() {
-                if (stopped) return;
+                if (stopped || auxiliaryChallenge() || document.readyState === "loading") return;
                 if (Date.now() - started > CREDIT.TAB_TIMEOUT) { stop(); return; }
 
                 if (new URLSearchParams(location.search).has("code")) { stop(); return; }
@@ -1724,9 +1945,9 @@
                     }
                 }
 
-                if (termsDone && !loginClicked) {
+                if ((!document.querySelector("#terms") || termsDone) && loginAttempts < 2 && Date.now() - loginAt >= 8000) {
                     const b = findLdLoginBtn();
-                    if (b && seen(b) && !b.disabled && b.getAttribute("aria-disabled") !== "true") { try { b.click(); loginClicked = true; } catch (_) {} }
+                    if (b && seen(b) && !b.disabled && b.getAttribute("aria-disabled") !== "true") { try { b.click(); loginClicked = true; loginAttempts++; loginAt = Date.now(); } catch (_) {} }
                 }
             }
             const ob = new MutationObserver(step);
@@ -1742,9 +1963,20 @@
         if (location.pathname === "/oauth2/authorize") {
 
             const cid = new URLSearchParams(location.search).get("client_id") || "";
+            const expectedUser = function () { const f = gmGet(AR.FLOW, null); return cid === AR.CLIENT_ID ? normUser(f?.expectedUser || currentLdUser()) : currentLdUser(); };
+            const correctUser = function () { return !!expectedUser() && authorizedUserFromPage() === expectedUser(); };
+            const markLevelHere = function () {
+                const level = levelRequired(document.body?.innerText || "");
+                if (cid !== CREDIT.CLIENT_ID || !level || !correctUser()) return false;
+                const error = "你的信任等级 " + level[1] + "，不满足该应用的要求；等待 TL3 后自动重试";
+                const flow = creditFlow();
+                if (flow && flow.username === authorizedUserFromPage()) updateCreditFlow(flow, { status: "level_required", error: error, at: Date.now(), currentLevel: Number(level[1]) });
+                saveCreditAccess(authorizedUserFromPage(), "level_required", error, Date.now(), Number(level[1]));
+                return true;
+            };
 
             const markDeniedHere = function () {
-                if (!deniedBoxText()) return false;
+                if (!deniedBoxText() || !correctUser()) return false;
                 if (document.querySelector('a[href^="/oauth2/approve/"]')) return false;
                 const who = authorizedUserFromPage();
                 if (!who) {
@@ -1752,32 +1984,36 @@
                     console.warn("[LDH] 授权页显示无权限，但读不到账号名，未落标志");
                     return true;
                 }
-                if (!getNoOauth(who)) saveNoOauth(who, "connect-page");
+                saveNoOauth(who, "connect-page");
+                const credit = creditFlow();
+                if (cid === CREDIT.CLIENT_ID && credit?.username === who) updateCreditFlow(credit, { status: "group_denied", error: NO_OAUTH_TEXT, at: Date.now() });
                 const arFlow = gmGet(AR.FLOW, null);
                 if (cid === AR.CLIENT_ID && arFlow && arFlow.step === "authorizing" && Date.now() - arFlow.ts < 180000) {
                     gmSet(AR.FLOW, Object.assign({}, arFlow, { step: "done", ts: Date.now(), noOauth: true, error: NO_OAUTH_MSG }));
                 }
                 return true;
             };
-            if (markDeniedHere()) return;
+            if (markDeniedHere() || markLevelHere()) return;
 
             let denyDone = false;
             const denyOb = new MutationObserver(function () {
                 if (denyDone) return;
-                if (markDeniedHere()) { denyDone = true; try { denyOb.disconnect(); } catch (_) {} }
+                if (markDeniedHere() || markLevelHere()) { denyDone = true; try { denyOb.disconnect(); } catch (_) {} }
             });
             try { denyOb.observe(document.documentElement, { childList: true, subtree: true, characterData: true }); } catch (_) {}
-            setTimeout(function () { denyDone = true; try { denyOb.disconnect(); } catch (_) {} }, 15000);
+            setTimeout(function () { denyDone = true; try { denyOb.disconnect(); } catch (_) {} }, 180000);
 
-            if (clientAllowed(cid) && !getNoOauth(authorizedUserFromPage() || currentLdUser())) {
+            const agentFlow = gmGet(AR.FLOW, null);
+            if (clientAllowed(cid) && (cid === CREDIT.CLIENT_ID || !getNoOauth(expectedUser()) || cid === AR.CLIENT_ID && agentFlow?.manual === true)) {
 
                 const bg = document.visibilityState === "hidden";
                 waitAndClick(function () {
+                    if (!correctUser() || auxiliaryChallenge()) return null;
                     const links = Array.prototype.slice.call(document.querySelectorAll('a[href^="/oauth2/approve/"]'));
                     return links.find(function (a) {
                         return (a.textContent || "").replace(/\s+/g, "") === "允许" && (bg || a.getClientRects().length > 0);
                     }) || null;
-                }, 30000);
+                }, 180000);
             }
             return;
         }
@@ -1795,13 +2031,14 @@
             tries++;
             const rings = document.querySelectorAll(".tl3-ring").length, bars = document.querySelectorAll(".tl3-bar-item").length;
             const emptyHome = (location.pathname === "/" || location.pathname === "") && document.querySelector(".card.empty-state");
+            if (auxiliaryChallenge()) return;
             if ((rings >= 3 && bars >= 5) || emptyHome) {
                 clearInterval(iv);
                 const d = parseConnectRoot(document);
                 const okStore = d && storeTL3(d, passedUser);
                 toast(okStore ? (d.locked ? "等级0/1：未到2级，已记录 ✔" : "✅ 等级3进度已同步") : "没读到账号，回 linux.do 点 ⟳ 重试");
                 if (autoClose && okStore) setTimeout(function () { try { window.close(); } catch (_) {} }, 1000);
-            } else if (tries > 25) { clearInterval(iv); if (autoClose) setTimeout(function () { try { window.close(); } catch (_) {} }, 500); }
+            } else if (tries > 225) { clearInterval(iv); toast("取数未完成，请完成验证后重试；本页保留"); }
         }, 800);
         return;
     }
@@ -1926,6 +2163,7 @@
     }
     let finishedOnce = false, frozenTimer = "", endNote = "";
     let syncState = "idle", syncAt = 0;
+    let forumIdentityAt = 0, agentObservedAt = 0, infoUploadJob = null;
     let arState = "idle", arText = "", arBal = "";
     let anyState = "idle";
     let me = { username: "", trustLevel: null };
@@ -1956,7 +2194,7 @@
         else if (!forumStableAt) forumStableAt = Date.now();
         if (running && !ready && ((!forumReadChecks && forumChallenge()) || document.querySelector("#challenge-form,#cf-challenge-running"))) stopEngine(forumChallengeError().message,"challenge");
         const last = readJson("ld_helper_last",null);
-        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.8",user:me.username,
+        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.9",user:me.username,
             account:accountState,ready:ready && Date.now()-forumStableAt>=8000,challenge:!!forumChallenge(),
             holdUntil:0,running:running,startedAt:startedAt,deadline:startedAt+totalMs(),
             sent:Object.assign({},sent),settings:runSettings ? Object.assign({},runSettings) : null,
@@ -2012,7 +2250,7 @@
         } catch (_) {}
         return null;
     }
-    function writeCreditCache(u, val) { gmSet(creditBalKey(u), JSON.stringify({ v: val, at: Date.now(), day: todayStr() })); }
+    function writeCreditCache(u, val, at) { gmSet(creditBalKey(u), JSON.stringify({ v: val, at: at || Date.now(), day: todayStr() })); }
 
     function fmtLdc(n) {
         const v = Number(n);
@@ -2029,9 +2267,10 @@
         }
         let b; try { b = JSON.parse(String(r.responseText || "").replace(/^﻿/, "")); }
         catch (_) { const e = new Error("Credit 返回非JSON"); e.needLogin = true; throw e; }
+        if (b?.error_msg === "未登录") { const e = new Error("Credit 未登录"); e.needLogin = true; throw e; }
         if (!b || r.status < 200 || r.status >= 300 || b.error_msg) throw new Error((b && b.error_msg) || ("HTTP " + r.status));
         const d = b && b.data;
-        if (!d || d.available_balance === undefined || d.available_balance === null) throw new Error("缺少 available_balance");
+        if (!d || !d.username || !d.id || d.available_balance == null || !Number.isFinite(Number(d.available_balance)) || Number(d.available_balance) < 0) throw new Error("Credit 账号或余额未确认");
         return { username: normUser(d.username), id: Number(d.id) || 0, balance: fmtLdc(d.available_balance) };
     }
 
@@ -2077,30 +2316,34 @@
     }
 
     function creditForegroundLogin() {
-        if(!forumSideReady())return Promise.reject(new Error("论坛未就绪，暂缓 Credit 授权"));
+        if (!forumSideReady()) return Promise.reject(new Error("论坛未就绪，暂缓 Credit 授权"));
+        if (!acquireTabLock()) return Promise.reject(new Error("另一个标签正在授权，稍后重试"));
+        const user = normUser(me.username), id = uuid4(), startedAt = Date.now();
+        gmSet(CREDIT.FLOW, { id: id, username: user, startedAt: startedAt, status: "opening" });
         return new Promise(function (resolve, reject) {
-            let handle = null;
-            try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1", { active: true, insert: true, setParent: true }); }
-            catch (_) { handle = null; }
-            if (!handle) { reject(new Error("无法打开标签")); return; }
-            let settled = false, checking = false;
-            const user = me.username;
+            let handle, settled = false, timer, deadline;
             function done(error, info) {
-                if (settled) return;
-                settled = true; clearInterval(iv); clearTimeout(deadline);
-                try { handle.close(); } catch (_) {}
-                if (error) reject(error); else resolve(info);
+                if (settled) return; settled = true; clearInterval(timer); clearTimeout(deadline);
+                if (creditFlow()?.id === id) gmDel(CREDIT.FLOW);
+                const finish = function () { releaseTabLock(); if (error) reject(error); else resolve(info); };
+                if (error) finish();
+                else setTimeout(function () { try { handle.close(); } catch (_) {} finish(); }, 1000);
             }
-            const deadline = setTimeout(function () { done(new Error("授权超时，请完成网页验证后重试。")); }, CREDIT.TAB_TIMEOUT);
-            const iv = setInterval(function () {
-                if (getNoOauth(user)) { done(noOauthError()); return; }
-                if (handle.closed) { done(new Error("授权标签已关闭。")); return; }
-                if (checking || settled) return;
-                checking = true;
-                creditUserInfo(CREDIT.API_TIMEOUT).then(function (info) {
-                    done(null, info);
-                }).catch(function () {}).finally(function () { checking = false; });
-            }, 1000);
+            try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1&ldh_credit_flow=" + encodeURIComponent(id), { active: true, insert: true, setParent: true }); }
+            catch (_) { done(new Error("无法打开 Credit 标签")); return; }
+            if (!handle) { done(new Error("无法打开 Credit 标签")); return; }
+            deadline = setTimeout(function () { done(new Error("Credit 等待超时，请完成网页验证后点击 LDC 重试")); }, CREDIT.TAB_TIMEOUT);
+            timer = setInterval(function () {
+                if (normUser(me.username) !== user) { done(new Error("论坛账号已变化")); return; }
+                const flow = creditFlow();
+                if (!flow || flow.id !== id) { done(new Error("Credit 流程已被替换")); return; }
+                if (flow.status === "ok" && flow.username === user && flow.userId > 0 && flow.at >= startedAt) {
+                    done(null, { username: user, id: flow.userId, balance: flow.balance, at: flow.at });
+                } else if (["level_required", "group_denied", "account_mismatch"].includes(flow.status)) {
+                    const error = new Error(flow.error); error.creditStatus = flow.status; error.currentLevel = flow.currentLevel;
+                    done(error);
+                } else if (handle.closed) done(new Error("Credit 授权标签已关闭"));
+            }, 400);
         });
     }
 
@@ -2111,52 +2354,34 @@
         return creditJob;
     }
     async function refreshCreditOnce(manual) {
-        const u = me.username;
-        if (!u) return;
-
-        if (!manual && getNoOauth(u)) { ldc = { state: "nooauth", value: "", msg: NO_OAUTH_MSG }; return; }
-
-        if (!manual) {
-            const cache = readCreditCache(u);
-            if (cache) { ldc = { state: "ok", value: cache.v, msg: "" }; render(); return; }
-        }
-        ldc = { state: "loading", value: "", msg: "读取中…" }; render();
-
-        let info = null;
-        try { info = await creditUserInfo(CREDIT.API_TIMEOUT); }
-        catch (e) {
-            if (!e || !e.needLogin) { ldc = { state: "fail", value: "", msg: (e && e.message) || "读取失败" }; render(); return; }
-
-            try { info = await creditCodeLogin(); }
-            catch (e2) {
-
-                if (e2 && e2.noOauth) {
-                    saveNoOauth(u, "credit", me.trustLevel);
-                    ldc = { state: "nooauth", value: "", msg: NO_OAUTH_MSG };
-                    render(); return;
-                }
-
-                if (!me.username) { ldc = { state: "fail", value: "", msg: "未登录 LINUX DO" }; render(); return; }
-                if (!manual && !acquireTabLock()) {
-                    ldc = { state: "fail", value: "", msg: "另一个标签正在登录，稍后重试" }; render(); return;
-                }
-                ldc = { state: "loading", value: "", msg: "打开标签登录中…" }; render();
-                try { info = await creditForegroundLogin(); }
-                catch (e3) {
-                    ldc = { state: "fail", value: "", msg: "纯代码:" + ((e2 && e2.message) || e2) + " / 标签:" + ((e3 && e3.message) || e3) };
-                    render(); return;
-                }
-                finally { if (!manual) releaseTabLock(); }
-            }
-        }
-        if (!info) return;
-
-        if (info.username && normUser(u) && info.username !== normUser(u)) {
-            ldc = { state: "mismatch", value: "", msg: "论坛 @" + u + " / Credit @" + info.username };
+        const user = normUser(me.username);
+        if (!user) return;
+        const previous = creditAccess(user);
+        if (!manual && previous?.status === "level_required" && me.trustLevel != null && me.trustLevel < 3) {
+            ldc = { state: "level_required", value: "", msg: previous.error };
             render(); return;
         }
-        writeCreditCache(u, info.balance);
-        ldc = { state: "ok", value: info.balance, msg: "" };
+        ldc = { state: "loading", value: "", msg: manual ? "打开新标签获取 Credit…" : "读取 Credit…" }; render();
+        try {
+            let info;
+            if (manual) info = await creditForegroundLogin();
+            else {
+                try { info = await creditUserInfo(CREDIT.API_TIMEOUT); }
+                catch (_) { info = await creditForegroundLogin(); }
+            }
+            if (normUser(me.username) !== user || !info.id || normUser(info.username) !== user) throw Object.assign(new Error("论坛账号与 Credit 账号不一致"), { creditStatus: "account_mismatch" });
+            const at = info.at || Date.now();
+            writeCreditCache(user, info.balance, at);
+            ldc = { state: "ok", value: info.balance, msg: "已核验 Credit 当前账号和最新余额" };
+            gmSet(creditAccessKey(user), { username: user, status: "ok", error: "", at: at });
+            queueForumPatch(user, { ldc: info.balance, value_times: { ldc: at }, ldc_status: "ok", ldc_status_at: at, ldc_error: "" }).catch(function () {});
+        } catch (error) {
+            if (normUser(me.username) !== user) return;
+            const status = error.creditStatus || "failed";
+            ldc = { state: status === "level_required" ? status : status === "account_mismatch" ? "mismatch" : "fail", value: "", msg: error.message || "Credit 本次取数失败" };
+            if (status === "group_denied") saveNoOauth(user, "credit-group");
+            if (status !== "account_mismatch") saveCreditAccess(user, status, ldc.msg, Date.now(), error.currentLevel);
+        }
         render();
     }
 
@@ -2168,13 +2393,15 @@
         const b = await r.json();
         const s = b && b.user_summary;
         if (!s || s.can_see_summary_stats === false) throw new Error("无权限查看摘要");
+        const count = function (value) { if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("摘要字段缺失"); return value; };
         return {
-            visitDays: Number(s.days_visited) || 0,
-            timeRead: Number(s.time_read) || 0,
-            topicsEntered: Number(s.topics_entered) || 0,
-            postsRead: Number(s.posts_read_count) || 0,
-            topicsCreated: Number(s.topic_count) || 0,
-            postsCreated: Number(s.post_count) || 0
+            visitDays: count(s.days_visited),
+            timeRead: count(s.time_read),
+            topicsEntered: count(s.topics_entered),
+            postsRead: count(s.posts_read_count),
+            topicsCreated: count(s.topic_count),
+            postsCreated: count(s.post_count),
+            likesGiven: count(s.likes_given), likesReceived: count(s.likes_received)
         };
     }
     function fmtK(v) { v = Number(v) || 0; return v < 1000 ? String(v) : (v / 1000).toFixed(1).replace(/\.0$/, "") + "k"; }
@@ -2250,30 +2477,16 @@
                 syncAt = Date.now(); syncState = "ok"; render();
                 try { if (handle.close) handle.close(); } catch (_) {}
             }
-            else if (n > 60) { clearInterval(iv); try { if (handle.close) handle.close(); } catch (_) {} syncState = "empty"; render(); }
+            else if (n > 120) { clearInterval(iv); syncState = "empty"; render(); }
         }, 1500);
     }
 
     let oauthRetrying = false;
     async function retryOauth() {
-        const u = me.username;
-        if (!u || oauthRetrying || arState === "running" || creditJob) return;
+        if (oauthRetrying) return;
         oauthRetrying = true;
-        clearNoOauth(u);
-        ldc = { state: "loading", value: "", msg: "重新检查授权权限…" };
-        arState = "idle"; arText = "重新检查授权权限…"; arBal = "";
-        render();
-        try { await refreshCredit(true); } catch (_) {}
-        try { await runArCheckin(true); } catch (_) {}
-        oauthRetrying = false;
-        if (getNoOauth(u)) {
-            ldhToast(NO_OAUTH_MSG + "，LDC / Agent / Any 保持停用。", "error");
-        } else if (ldc.state === "ok" || arState === "ok") {
-            ldhToast("授权权限已恢复，LDC / Agent / Any 重新启用。", "success");
-        } else {
-            ldhToast("授权重试尚未成功，请查看 LDC / Agent 的错误提示。", "error");
-        }
-        render();
+        try { await runArCheckin(true, true); }
+        finally { oauthRetrying = false; render(); }
     }
     function sync() {
         if(!forumSideReady())return;
@@ -2796,11 +3009,13 @@
     function arSuccessText() {
         return gmGet(AR.REWARDKEY, "") === todayStr() ? "签到成功" : "今日登录签到已处理，接口未确认新增签到奖励";
     }
-    function runArCheckin(force) {
+    function runArCheckin(force, manual) {
+        manual = manual === undefined ? !!force : manual === true;
+        const expectedUser = normUser(me.username);
         if(!forumSideReady())return Promise.resolve();
         if (!me.username) return Promise.resolve();
         if (arState === "running") return Promise.resolve();
-        if (!force && getNoOauth(me.username)) {
+        if (!manual && getNoOauth(me.username)) {
             arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
             return Promise.resolve();
         }
@@ -2820,12 +3035,16 @@
 
             arState = "running"; arText = "读取余额中…"; arBal = ""; render();
             return arBalance(null, { retries: 3 }).then(function (bal) {
+                if (normUser(me.username) !== expectedUser) return;
+                agentObservedAt = Date.now();
+                queueForumPatch(expectedUser, { agent: bal, value_times: { agent: agentObservedAt } }).catch(function () {});
                 arState = "ok"; arText = arSuccessText(); arBal = bal;
                 gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
                 render();
             }).catch(function (e) {
 
+                if (normUser(me.username) !== expectedUser) return;
                 arState = "pending"; arBal = "";
                 arText = "今日登录签到已处理，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
                 saveArNote("pending", arText, "");
@@ -2835,25 +3054,32 @@
 
         arState = "running"; arText = "签到中…"; arBal = ""; render();
 
-        return arCheckin(function (s) { arText = s; }, force).then(function (r) {
+        return arCheckin(function (s) { arText = s; }, manual).then(function (r) {
+            if (normUser(me.username) !== expectedUser) throw new Error("论坛账号已变化");
             if (r && r.checkedIn) gmSet(AR.REWARDKEY, today);
             const checkinText = arSuccessText();
 
             gmSet(AR.DAYKEY, today);
 
             return arBalance(r && r.user, { waitFirst: 800, retries: 3 }).then(function (bal) {
+                if (normUser(me.username) !== expectedUser) throw new Error("论坛账号已变化");
                 arState = "ok"; arText = checkinText; arBal = bal;
+                agentObservedAt = Date.now();
+                const patch = { agent: bal, value_times: { agent: agentObservedAt } };
+                if (manual) { clearNoOauth(expectedUser, agentObservedAt); patch.no_oauth = false; patch.oauth_at = agentObservedAt; patch.agent_manual_recovered = true; }
+                queueForumPatch(expectedUser, patch).catch(function () {});
                 gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
                 render();
             }).catch(function (e) {
+                if (normUser(me.username) !== expectedUser) return;
                 arState = "pending"; arBal = "";
                 arText = "今日登录签到已处理，余额读取失败：" + ((e && e.message) || e) + "，点击重试";
                 saveArNote("pending", arText, "");
                 render();
             });
         }).catch(function (e) {
-
+            if (normUser(me.username) !== expectedUser) return;
             if (e && e.noOauth) {
                 saveNoOauth(me.username, "agentrouter", me.trustLevel);
                 arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
@@ -2944,9 +3170,7 @@
         if (forumOnly()) return '<span style="color:#aaa;" title="本次由 BAT 运行，仅处理论坛阅读/点赞">' + SP3 + "LDC：跳过</span>";
         const base = '<span id="ldh_ldc" style="cursor:pointer;';
 
-        if (!oauthRetrying && getNoOauth(me.username)) {
-            return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "，已停止请求。点标题栏 ⟳ 可强制重试一次") + '">' + SP3 + "LDC：失败</span>";
-        }
+        if (ldc.state === "level_required") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg) + '">' + SP3 + "LDC：失败（等待TL3）</span>";
         if (ldc.state === "ok") {
             return base + 'color:#8fe0b0;" title="' + esc(ldc.msg || "可用 LINUX DO Credits，点击刷新") + '">' + SP3 + "LDC：" + esc(ldc.value) + "</span>";
         }
@@ -2961,7 +3185,7 @@
         if (forumOnly()) return '<span style="color:#aaa;" title="本次由 BAT 运行，仅处理论坛阅读/点赞">' + SP3 + "Agent：跳过</span>";
         const base = '<span id="ldh_arbal" style="cursor:pointer;';
         if (!oauthRetrying && getNoOauth(me.username)) {
-            return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "，已停止请求。点标题栏 ⟳ 可强制重试一次") + '">' + SP3 + "Agent：失败</span>";
+            return base + 'color:#ff8a8a;" title="' + esc(NO_OAUTH_MSG + "；点击 Agent 手动重试，成功后解除青春版") + '">' + SP3 + "Agent：青春版</span>";
         }
         if (arState === "running") return base + 'color:#e0c060;" title="' + esc(arText || "签到中") + '">' + SP3 + "Agent：获取中</span>";
         if (arState === "pending") return base + 'color:#e0c060;" title="' + esc(arText || "签到已成功，余额读取失败，点击重试") + '">' + SP3 + "Agent：待刷新</span>";
@@ -2986,7 +3210,7 @@
         const list = [];
 
         if (arState === "fail") list.push({ t: "Agent：" + (arText || "签到失败"), full: arText || "签到失败" });
-        if (ldc.state === "fail") list.push({ t: "LDC：" + (ldc.msg || "读取失败"), full: ldc.msg || "读取失败" });
+        if (ldc.state === "fail" || ldc.state === "level_required") list.push({ t: "LDC：" + (ldc.msg || "读取失败"), full: ldc.msg || "读取失败" });
         else if (ldc.state === "mismatch") list.push({ t: "LDC：账号不符", full: ldc.msg || "论坛账号与 Credit 账号不同" });
         if (getAnyBan(me.username)) list.push({ t: "any：已被封禁", full: "AnyRouter 账号已被封禁" });
         if (!isLowTL() && !readTL3() && (syncState === "cf" || syncState === "err" || syncState === "empty" || syncState === "nogrant" || syncState === "otheruser" || syncState === "popupblock")) {
@@ -3013,19 +3237,21 @@
         const M = MODES[activeMode];
         const timer = running && M ? "⏱ " + mmss(Math.min(elapsed(), totalMs())) : frozenTimer;
 
-        const nameHtml = me.username ? esc(me.username) : '<span style="color:#ff8a8a;">' + esc(accountLabel()) + "</span>";
+        const nameHtml = me.username ? '<span id="ldh_username" style="cursor:pointer;color:inherit;" title="点击更新全部账号信息并同步网站">' + esc(me.username) + "</span>" : '<span style="color:#ff8a8a;">' + esc(accountLabel()) + "</span>";
         const accountHtml = nameHtml + tlBadge() + ldcSpan() + arSpan();
         const timerElement = document.getElementById("ldh_timer");
         if (!timerElement || r1._ldhAccountHtml !== accountHtml) {
             r1.innerHTML = accountHtml +
                 '<span id="ldh_timer" style="float:right;color:#8fe0b0;margin-left:8px;">' + timer + "</span>";
             r1._ldhAccountHtml = accountHtml;
+            const bindUser = document.getElementById("ldh_username");
+            if (bindUser) bindUser.addEventListener("click", refreshAllAndUpload);
             const bindLdc = document.getElementById("ldh_ldc");
             if (bindLdc) bindLdc.addEventListener("click", function () { refreshCredit(true); });
             const bindAr = document.getElementById("ldh_arbal");
             if (bindAr) bindAr.addEventListener("click", function () {
 
-                runArCheckin(arState !== "pending");
+                runArCheckin(true, true);
             });
         } else {
             timerElement.textContent = timer;
@@ -3398,10 +3624,92 @@
         }
     }
 
+    async function freshGrade(since, username) {
+        if (isLowTL()) {
+            for (let attempt = 0; attempt < 2; attempt++) {
+                await loadSummary(true);
+                const cached = readJson("ldh_summary_" + username, null);
+                if (cached?.at >= since && Object.keys(cached.data || {}).length === 8) return;
+                await arWait(1500);
+            }
+            throw new Error("账号摘要本次未取全，保留网站已有数据");
+        }
+        sync();
+        const until = Date.now() + 185000;
+        let retried = false;
+        while (Date.now() < until) {
+            if (normUser(me.username) !== username) throw new Error("论坛账号已变化，停止本次同步");
+            const grade = readTL3();
+            if (grade && grade.at >= since && normUser(grade.account) === username &&
+                    (grade.locked || Object.keys(grade.metrics || {}).length === 8 && Object.keys(grade.compliance || {}).length === 4)) return;
+            if (["otheruser", "popupblock", "nogrant"].includes(syncState)) throw new Error("等级同步失败，请检查 Connect 登录状态和跨域权限");
+            if (!retried && ["ok", "empty", "err"].includes(syncState) && Date.now() - since > 15000) { retried = true; sync(); }
+            await arWait(500);
+        }
+        throw new Error("等级条件本次未取全，保留网站已有数据");
+    }
+    function currentForumPatch(since, username) {
+        const fresh = function (at) { return at >= since && at <= Date.now() && Date.now() - at <= 600000; };
+        const patch = { trust_level: me.trustLevel, value_times: { trust_level: forumIdentityAt } };
+        const grade = readTL3();
+        if (grade && fresh(grade.at) && normUser(grade.account) === username) {
+            patch.grade_at = grade.at; patch.grade_status = grade.locked ? "not_open" : "captured";
+            if (!grade.locked) { patch.metrics = grade.metrics; patch.compliance = grade.compliance; }
+        }
+        const cachedSummary = readJson("ldh_summary_" + username, null);
+        if (isLowTL() && cachedSummary && fresh(cachedSummary.at)) {
+            const names = { visitDays: "visit_days", timeRead: "time_read", topicsEntered: "topics_entered", postsRead: "posts_read",
+                topicsCreated: "topics_created", postsCreated: "posts_created", likesGiven: "likes_given", likesReceived: "likes_received" };
+            patch.summary = {};
+            Object.keys(names).forEach(function (key) { if (Number.isFinite(cachedSummary.data[key])) patch.summary[names[key]] = cachedSummary.data[key]; });
+            patch.summary_at = patch.grade_at = cachedSummary.at; patch.grade_status = "summary_only";
+        }
+        const credit = readCreditCache(username), access = creditAccess(username);
+        if (access && fresh(access.at)) {
+            patch.ldc_status = access.status; patch.ldc_status_at = access.at; patch.ldc_error = access.error;
+            if (access.status === "level_required") patch.ldc_required_level = 3;
+        }
+        if (ldc.state === "ok" && credit && fresh(credit.at)) { patch.ldc = credit.v; patch.value_times.ldc = credit.at; }
+        if (!getNoOauth(username) && arState === "ok" && arBal && fresh(agentObservedAt)) { patch.agent = arBal; patch.value_times.agent = agentObservedAt; }
+        const denied = getNoOauth(username);
+        if (denied) { patch.no_oauth = true; patch.oauth_at = denied.at; patch.agent_denied_reason = NO_OAUTH_TEXT; }
+        return patch;
+    }
+    function refreshAllAndUpload() {
+        if (infoUploadJob) return infoUploadJob;
+        infoUploadJob = (async function () {
+            const since = Date.now(), errors = [];
+            ldhToast("正在刷新账号信息并同步网站…", "info");
+            const readyDeadline = Date.now() + 180000;
+            do {
+                if (!auxiliaryChallenge()) await refreshForumUser(true, true);
+                if (accountState === "authenticated" && forumIdentityAt >= since && forumSideReady()) break;
+                if (accountState === "anonymous") throw new Error("论坛未登录，请先登录");
+                await arWait(5000);
+            } while (Date.now() < readyDeadline);
+            const username = normUser(me.username);
+            if (!username || accountState !== "authenticated" || forumIdentityAt < since) throw new Error("论坛登录身份未确认，完成验证后重试");
+            const deadline = Date.now() + 30000;
+            while (!forumSideReady() && Date.now() < deadline) await arWait(500);
+            if (!forumSideReady()) throw new Error("论坛页面仍待验证，完成后再点击用户名");
+            await syncAgentPolicy(username);
+            try { await freshGrade(since, username); } catch (error) { errors.push(error.message); }
+            await refreshCredit(true);
+            if (!getNoOauth(username)) await runArCheckin(true, false);
+            if (normUser(me.username) !== username) throw new Error("论坛账号已变化，停止本次上传");
+            const result = await queueForumPatch(username, currentForumPatch(since, username));
+            if (ldc.state !== "ok") errors.push(ldc.msg || "LDC 本次未取到");
+            if (!getNoOauth(username) && arState !== "ok") errors.push(arText || "Agent 本次未取到");
+            ldhToast((result?.message || "账号资料已同步网站") + (errors.length ? "；" + errors.join("；") : ""), errors.length ? "info" : "success");
+        })().catch(function (error) { ldhToast(error.message + "；已取得资料保留待重试", "error"); })
+            .finally(function () { infoUploadJob = null; });
+        return infoUploadJob;
+    }
+
     let forumUserJob = null;
-    function refreshForumUser(force) {
-        if (forumUserJob) return force ? forumUserJob.then(function () { return refreshForumUser(); }) : forumUserJob;
-        forumUserJob = getUser().then(function (u) {
+    function refreshForumUser(force, onlyIdentity) {
+        if (forumUserJob) return force ? forumUserJob.then(function () { return refreshForumUser(false, onlyIdentity); }) : forumUserJob;
+        forumUserJob = getUser().then(async function (u) {
             if (!u.username && accountState !== "anonymous") { render(); return; }
             const oldUser = currentLdUser(), user = normUser(u.username);
             if (normUser(me.username) !== user) {
@@ -3411,15 +3719,17 @@
                 arState = "idle"; arText = ""; arBal = "";
             }
             me = u;
+            forumIdentityAt = Date.now();
             if (!user) { render(); return; }
             if (oldUser && oldUser !== user) {
                 [AR.DAYKEY, AR.REWARDKEY, AR.NOTEKEY, AR.UIDKEY, AR.BALKEY, AR.BALDAY, AR.SIDEKEY, AR.FLOW, AR.AUTOKEY].forEach(gmDel);
             }
             gmSet(LD_USER_KEY, user);
+            await syncAgentPolicy(user);
             const saved = loadArNote();
             if (saved && arState !== "running") { arState = saved.state; arText = saved.text; arBal = saved.bal; }
             render();
-            if (forumOnly()) return;
+            if (forumOnly() || onlyIdentity) return;
             if (isLowTL()) loadSummary(false);
             else {
                 const cached = readTL3();
@@ -3478,7 +3788,6 @@
         document.getElementById("ldh_sync").addEventListener("click", function () {
 
             if (!me.username) { refreshForumUser(true); return; }
-            if (getNoOauth(me.username)) retryOauth();
             sync();
         });
         document.getElementById("ldh_min").addEventListener("click", function () { toggleMin(); });
@@ -3486,7 +3795,7 @@
         document.getElementById("ldh_any").addEventListener("click", function () {
 
             if (getNoOauth(me.username)) {
-                ldhToast(NO_OAUTH_MSG + "，AnyRouter 登录必然被拒。点 ⟳ 可强制重试一次。", "error");
+                ldhToast(NO_OAUTH_MSG + "，AnyRouter 自动登录已停用；点击 Agent 可手动重试权限。", "error");
                 return;
             }
 
