@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.3.9
+// @version      1.4.0
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -155,9 +155,9 @@
     function normUser(s) { return stripAt(s).toLowerCase(); }
     function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 
-    function todayStr() {
-        const d = new Date(Date.now() + 8 * 3600 * 1000);
-        return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
+    function todayStr(at) {
+        // UTC midnight is Beijing 08:00, independent of the browser timezone.
+        return new Date(at == null ? Date.now() : at).toISOString().slice(0, 10);
     }
     function gmGet(k, fb) { try { return GM_getValue(k, fb); } catch (_) { return fb; } }
     function gmSet(k, v) { try { GM_setValue(k, v); } catch (_) {} }
@@ -343,12 +343,12 @@
         HOST: "https://agentrouter.org",
         CLIENT_ID: "KZUecGfhhDZMVnv8UtEdhOhf9sNOhqVX",
         FLOW: "ar_tab_flow",
-        DAYKEY: "ar_last_ok_day",
-        REWARDKEY: "ar_reward_confirmed_day",
-        NOTEKEY: "ar_checkin_note",
+        DAYKEY: "ar_last_ok_day_0800_v140",
+        REWARDKEY: "ar_reward_confirmed_day_0800_v140",
+        NOTEKEY: "ar_checkin_note_0800_v140",
         UIDKEY: "ar_user_id",
         BALKEY: "ar_balance",
-        BALDAY: "ar_balance_day",
+        BALDAY: "ar_balance_day_0800_v140",
 
         AUTOKEY: "ar_auto_login_ts",
         SIDEKEY: "ar_side_login_v1",
@@ -547,7 +547,8 @@
         return null;
     }
     function parseConnectRoot(root) {
-        const numOf = function (el) { if (!el) return null; const t = (el.textContent || "").replace(/[^\d.]/g, ""); return t === "" ? null : Number(t); };
+        const parseNumber = function (text) { const t = String(text == null ? "" : text).replace(/[^\d.\-]/g, ""); if (!t) return null; const n = Number(t); return successNumber(n) ? n : null; };
+        const numOf = function (el) { return el ? parseNumber(el.textContent) : null; };
         const rings = root.querySelectorAll(".tl3-ring");
         const bars = root.querySelectorAll(".tl3-bar-item");
         const subEl = root.querySelector(".card-subtitle");
@@ -558,18 +559,21 @@
             return null;
         }
         const data = { at: Date.now(), account: account, locked: false, metrics: {}, compliance: {} };
-        rings.forEach(function (r) { const k = labelKey(r.querySelector(".tl3-ring-label") && r.querySelector(".tl3-ring-label").textContent); if (!k) return; data.metrics[k] = { c: numOf(r.querySelector(".tl3-ring-current")) || 0, r: numOf(r.querySelector(".tl3-ring-target")) || 0 }; });
-        bars.forEach(function (b) { const k = labelKey(b.querySelector(".tl3-bar-label") && b.querySelector(".tl3-bar-label").textContent); if (!k) return; const parts = ((b.querySelector(".tl3-bar-nums") && b.querySelector(".tl3-bar-nums").textContent) || "").split("/"); data.metrics[k] = { c: Number((parts[0] || "").replace(/[^\d.]/g, "")) || 0, r: Number((parts[1] || "").replace(/[^\d.]/g, "")) || 0 }; });
-        function firstNum(el) { const t = (el && el.textContent) || ""; return Number((t.split("/")[0] || "").replace(/[^\d.]/g, "")) || 0; }
-        root.querySelectorAll(".tl3-quota-card").forEach(function (q) { const k = labelKey(q.querySelector(".tl3-quota-label") && q.querySelector(".tl3-quota-label").textContent); if (k) data.compliance[k] = firstNum(q.querySelector(".tl3-quota-nums")); });
-        root.querySelectorAll(".tl3-veto-item").forEach(function (v) { const k = labelKey(v.querySelector(".tl3-veto-label") && v.querySelector(".tl3-veto-label").textContent); if (k) data.compliance[k] = firstNum(v.querySelector(".tl3-veto-value")); });
+        function pair(key, current, required) { if (key && current !== null && required !== null) data.metrics[key] = { c: current, r: required }; }
+        rings.forEach(function (r) { const k = labelKey(r.querySelector(".tl3-ring-label")?.textContent); pair(k, numOf(r.querySelector(".tl3-ring-current")), numOf(r.querySelector(".tl3-ring-target"))); });
+        bars.forEach(function (b) { const k = labelKey(b.querySelector(".tl3-bar-label")?.textContent); const parts = (b.querySelector(".tl3-bar-nums")?.textContent || "").split("/"); if (parts.length === 2) pair(k, parseNumber(parts[0]), parseNumber(parts[1])); });
+        function compliance(selector, label, value) { root.querySelectorAll(selector).forEach(function (el) { const k = labelKey(el.querySelector(label)?.textContent), n = parseNumber((el.querySelector(value)?.textContent || "").split("/")[0]); if (k && n !== null) data.compliance[k] = n; }); }
+        compliance(".tl3-quota-card", ".tl3-quota-label", ".tl3-quota-nums");
+        compliance(".tl3-veto-item", ".tl3-veto-label", ".tl3-veto-value");
         return data;
     }
     function storeTL3(data, fallbackUser) {
         if (!data) return false;
         const u = normUser(data.account) || normUser(fallbackUser);
         if (!u) return false;
+        if (fallbackUser && normUser(fallbackUser) !== u) return false;
         try { GM_setValue("ld_tl3_" + u, JSON.stringify(data)); } catch (_) { return false; }
+        publishGradeSuccess(data, fallbackUser);
         return true;
     }
 
@@ -607,6 +611,68 @@
     const NO_OAUTH_PREFIX = "ldh_no_oauth_";
     const WEBSITE_SYNC = { endpoint: "https://any.909724.xyz/api/userscript-account-sync", admin: "https://any.909724.xyz/lzhp529",
         key: "ldh_forum_sync_key", pending: "ldh_forum_sync_outbox_v1", entry: "ldh_forum_sync_entry_", recovery: "ldh_agent_recovery_" };
+    const FORUM_SUCCESS_PREFIX = "ldh_forum_success_v140_";
+    const SUCCESS_METRICS = ["visit_days", "topics_viewed", "posts_viewed", "topics_replied", "likes_given", "likes_received", "liked_days", "liked_by_users"];
+    const SUCCESS_COMPLIANCE = ["reported_posts", "users_reported", "muted", "banned"];
+    const SUCCESS_SUMMARY = { visitDays: "visit_days", timeRead: "time_read", topicsEntered: "topics_entered", postsRead: "posts_read",
+        topicsCreated: "topics_created", postsCreated: "posts_created", likesGiven: "likes_given", likesReceived: "likes_received" };
+    function successNumber(value) { return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1e15; }
+    function successTime(value, now) { return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= now; }
+    function sameServiceDay(at, now) { return successTime(at, now) && todayStr(at) === todayStr(now); }
+    function rememberForumSuccess(username, patch) {
+        const user = normUser(username), now = Date.now();
+        if (!user || !patch || typeof patch !== "object") return;
+        const key = FORUM_SUCCESS_PREFIX + user, saved = gmGet(key, null);
+        const row = saved?.username === user ? saved : { username: user, value_times: {}, metrics: {}, metric_times: {}, compliance: {}, compliance_times: {}, summary: {}, summary_times: {} };
+        row.value_times = row.value_times || {};
+        for (const name of ["trust_level", "agent", "ldc"]) {
+            const value = patch[name], at = patch.value_times?.[name];
+            const valid = name === "trust_level" ? Number.isInteger(value) && value >= 0 && value <= 3 :
+                typeof value === "string" && (name === "agent" ? /^\$\d{1,18}(?:\.\d{1,8})?$/ : /^\d{1,18}(?:\.\d{1,8})?$/).test(value);
+            if (valid && successTime(at, now) && at >= (row.value_times[name] || 0)) { row[name] = value; row.value_times[name] = at; }
+        }
+        for (const [name, times, allowed, stamp] of [["metrics", "metric_times", SUCCESS_METRICS, patch.grade_at],
+            ["compliance", "compliance_times", SUCCESS_COMPLIANCE, patch.grade_at], ["summary", "summary_times", Object.values(SUCCESS_SUMMARY), patch.summary_at]]) {
+            row[name] = row[name] || {}; row[times] = row[times] || {};
+            if (!successTime(stamp, now)) continue;
+            for (const field of allowed) {
+                const value = patch[name]?.[field];
+                const valid = name === "metrics" ? value && successNumber(value.c) && successNumber(value.r) : successNumber(value);
+                if (valid && stamp >= (row[times][field] || 0)) { row[name][field] = value; row[times][field] = stamp; }
+            }
+        }
+        gmSet(key, row);
+    }
+    function currentForumSuccess(username, now) {
+        const user = normUser(username); now = now || Date.now();
+        const saved = gmGet(FORUM_SUCCESS_PREFIX + user, null);
+        const row = { version: "1.4.0", username: user, day: todayStr(now), value_times: {}, metrics: {}, metric_times: {}, compliance: {}, compliance_times: {}, summary: {}, summary_times: {} };
+        if (!saved || saved.username !== user) return row;
+        for (const name of ["trust_level", "agent", "ldc"]) {
+            const at = saved.value_times?.[name];
+            if (sameServiceDay(at, now) && saved[name] != null) { row[name] = saved[name]; row.value_times[name] = at; }
+        }
+        for (const [name, times] of [["metrics", "metric_times"], ["compliance", "compliance_times"], ["summary", "summary_times"]]) {
+            for (const [field, at] of Object.entries(saved[times] || {})) {
+                if (sameServiceDay(at, now) && saved[name]?.[field] != null) { row[name][field] = saved[name][field]; row[times][field] = at; }
+            }
+        }
+        return row;
+    }
+    function publishGradeSuccess(data, fallbackUser) {
+        const user = normUser(data?.account), expected = normUser(fallbackUser);
+        if (!user || (expected && user !== expected) || data.locked || !successTime(data.at, Date.now())) return;
+        const metrics = {}, compliance = {};
+        for (const key of SUCCESS_METRICS) { const value = data.metrics?.[key]; if (value && successNumber(value.c) && successNumber(value.r)) metrics[key] = value; }
+        for (const key of SUCCESS_COMPLIANCE) { if (successNumber(data.compliance?.[key])) compliance[key] = data.compliance[key]; }
+        if (Object.keys(metrics).length || Object.keys(compliance).length) queueForumPatch(user, { metrics, compliance, grade_at: data.at, grade_status: "captured" }).catch(function () {});
+    }
+    function publishSummarySuccess(username, data, at) {
+        const values = {};
+        for (const [key, name] of Object.entries(SUCCESS_SUMMARY)) if (successNumber(data?.[key])) values[name] = data[key];
+        if (Object.keys(values).length && successTime(at, Date.now())) queueForumPatch(username, { summary: values, summary_at: at, grade_at: at, grade_status: "summary_only" }).catch(function () {});
+    }
+
     let websiteJob = null;
     async function websiteRequest(payload) {
         const key = String(gmGet(WEBSITE_SYNC.key, "") || gmGet("ldh_any_import_key", "") || "").trim();
@@ -659,7 +725,9 @@
     function queueForumPatch(username, values) {
         const user = normUser(username);
         if (!user) return Promise.reject(new Error("论坛用户名未确认"));
+        rememberForumSuccess(user, values);
         const patch = Object.assign({}, values, { username: user, login_status: "authenticated", observed_at: Date.now() });
+        if (values.grade_at || values.summary_at) patch.cache_source = "userscript";
         const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
         gmSet(WEBSITE_SYNC.entry + id, { id: id, patch: patch });
         return flushWebsiteOutbox();
@@ -683,6 +751,7 @@
         if (key?.trim()) { gmSet(WEBSITE_SYNC.key, key.trim()); flushWebsiteOutbox().catch(function (error) { ldhToast(error.message, "error"); }); }
     }); } catch (_) {}
     setTimeout(function () { if (websiteOutbox().length) flushWebsiteOutbox().catch(function () {}); }, 3000);
+    setInterval(function () { if (websiteOutbox().length) flushWebsiteOutbox().catch(function () {}); }, 60000);
 
     function creditAccessKey(user) { return "ldh_credit_access_" + normUser(user); }
     function creditAccess(user) { const row = gmGet(creditAccessKey(user), null); return row && row.username === normUser(user) ? row : null; }
@@ -2194,7 +2263,7 @@
         else if (!forumStableAt) forumStableAt = Date.now();
         if (running && !ready && ((!forumReadChecks && forumChallenge()) || document.querySelector("#challenge-form,#cf-challenge-running"))) stopEngine(forumChallengeError().message,"challenge");
         const last = readJson("ld_helper_last",null);
-        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.3.9",user:me.username,
+        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.4.0",user:me.username,
             account:accountState,ready:ready && Date.now()-forumStableAt>=8000,challenge:!!forumChallenge(),
             holdUntil:0,running:running,startedAt:startedAt,deadline:startedAt+totalMs(),
             sent:Object.assign({},sent),settings:runSettings ? Object.assign({},runSettings) : null,
@@ -2206,12 +2275,24 @@
             if(cmd.action==="start")startMode(cmd.mode||"daily");
             else if(cmd.action==="stop")stopEngine("Python 请求停止","stopped");
             else if(cmd.action==="probe"&&!running)refreshForumUser(true);
+            else if(cmd.action==="daily_data") {
+                const user = normUser(me.username);
+                const valid = accountState === "authenticated" && user && user === normUser(currentLdUser());
+                document.documentElement.setAttribute("data-ldh-daily-success-v140", JSON.stringify(valid ? currentForumSuccess(user) : { error: "当前账号未确认" }));
+            }
             else if(cmd.action==="side"&&!forumOnly()&&forumSurfaceReady()){
                 sideAllowed=true;
                 if(forumSideReady()){sync();refreshCredit(false).then(function(){if(forumSideReady())return runArCheckin(false);}).catch(function(){});}
             }
             publishHealth();
         });
+        let collectionDay = todayStr();
+        setInterval(function () {
+            const day = todayStr();
+            if (day !== collectionDay && !managedByPython() && !running && forumSideReady()) {
+                collectionDay = day; refreshForumUser(true).catch(function () {});
+            }
+        }, 60000);
         setInterval(publishHealth,1000);publishHealth();
     }
     function ledgerKey() { return "ldh_read_120_" + normUser(me.username); }
@@ -2246,11 +2327,11 @@
     function readCreditCache(u) {
         try {
             const v = JSON.parse(gmGet(creditBalKey(u), "null"));
-            if (v && v.day === todayStr() && v.v) return v;
+            if (v && sameServiceDay(v.at, Date.now()) && v.v) return v;
         } catch (_) {}
         return null;
     }
-    function writeCreditCache(u, val, at) { gmSet(creditBalKey(u), JSON.stringify({ v: val, at: at || Date.now(), day: todayStr() })); }
+    function writeCreditCache(u, val, at) { at = at || Date.now(); gmSet(creditBalKey(u), JSON.stringify({ v: val, at: at, day: todayStr(at) })); }
 
     function fmtLdc(n) {
         const v = Number(n);
@@ -2393,20 +2474,16 @@
         const b = await r.json();
         const s = b && b.user_summary;
         if (!s || s.can_see_summary_stats === false) throw new Error("无权限查看摘要");
-        const count = function (value) { if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("摘要字段缺失"); return value; };
-        return {
-            visitDays: count(s.days_visited),
-            timeRead: count(s.time_read),
-            topicsEntered: count(s.topics_entered),
-            postsRead: count(s.posts_read_count),
-            topicsCreated: count(s.topic_count),
-            postsCreated: count(s.post_count),
-            likesGiven: count(s.likes_given), likesReceived: count(s.likes_received)
-        };
+        const fields = {visitDays:"days_visited",timeRead:"time_read",topicsEntered:"topics_entered",postsRead:"posts_read_count",topicsCreated:"topic_count",postsCreated:"post_count",likesGiven:"likes_given",likesReceived:"likes_received"};
+        const values = {};
+        for (const [key, source] of Object.entries(fields)) if (successNumber(s[source])) values[key] = s[source];
+        if (!Object.keys(values).length) throw new Error("摘要字段缺失");
+        return values;
     }
-    function fmtK(v) { v = Number(v) || 0; return v < 1000 ? String(v) : (v / 1000).toFixed(1).replace(/\.0$/, "") + "k"; }
+    function fmtK(v) { if (v == null) return "？"; v = Number(v) || 0; return v < 1000 ? String(v) : (v / 1000).toFixed(1).replace(/\.0$/, "") + "k"; }
 
     function fmtDur(sec) {
+        if (sec == null) return "？";
         sec = Math.max(0, Number(sec) || 0);
         const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600),
               m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
@@ -2419,15 +2496,16 @@
         const user = me.username;
         if (!user) return Promise.resolve();
         const key = "ldh_summary_" + normUser(user), cached = readJson(key, null);
-        if (!force && cached && cached.data && Date.now() - cached.at >= 0 && Date.now() - cached.at < SYNC_THROTTLE_MS) {
+        if (!force && cached && cached.data && Date.now() - cached.at >= 0 && Date.now() - cached.at < SYNC_THROTTLE_MS && sameServiceDay(cached.at, Date.now())) {
             summary = cached.data; summaryState = "ok"; render(); return Promise.resolve();
         }
         if (summaryState === "loading") return Promise.resolve();
         summaryState = "loading"; render();
         return fetchSummary(user).then(function (s) {
-            writeJson(key, { at: Date.now(), data: s });
             if (me.username !== user) return;
+            const at = Date.now(); writeJson(key, { at: at, data: s });
             summary = s; summaryState = "ok"; render();
+            publishSummarySuccess(user, s, at);
         }).catch(function () {
             if (me.username !== user) return;
             summary = null; summaryState = "fail"; render();
@@ -2946,7 +3024,7 @@
         if (engineController) { engineController.abort(); engineController = null; }
         wakeAll(); frozenTimer = "⏱ " + mmss(used); endNote = note || ""; activeMode = "";
         document.documentElement.removeAttribute("data-ldh-run-until");
-        writeJson("ld_helper_last", { version: "1.3.8", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
+        writeJson("ld_helper_last", { version: "1.4.0", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
             warnings: runWarnings.slice(), settings: Object.assign({}, runSettings), sent: Object.assign({}, sent), batches:batchEvidence.slice(), requests:requestEvidence.slice(),
             scan: { pages: pool.pages, skipped: pool.skipped, unknown: pool.unknown, filteredReplies: pool.filteredReplies, minRepliesExclusive: MIN_TOPIC_REPLIES_EXCLUSIVE }, frozen: frozenTimer, endNote: endNote });
         restoreButtons(); resumeIdleWork(); render();
@@ -3097,8 +3175,12 @@
 
         try {
             const v = JSON.parse(gmGet(AR.SIDEKEY, "null"));
-            if (!v || !v.bal || (v.uid && arUid() && Number(v.uid) !== arUid())) return;
+            if (!v || !v.bal || !arUid() || !v.uid || Number(v.uid) !== arUid()) return;
             if (Date.now() - Number(v.at || 0) > 30 * 60 * 1000) return;
+            if (!sameServiceDay(Number(v.at || 0), Date.now()) || !/^\$\d+(?:\.\d+)?$/.test(String(v.bal))) return;
+            if (v.at <= agentObservedAt) return;
+            agentObservedAt = v.at;
+            queueForumPatch(me.username, { agent: v.bal, value_times: { agent: v.at } }).catch(function () {});
             if (v.bal === arBal) return;
             arBal = v.bal;
             gmSet(AR.BALKEY, v.bal); gmSet(AR.BALDAY, todayStr());
@@ -3130,8 +3212,8 @@
         if (isLowTL()) {
             if (summary) {
                 return [
-                    "访问" + summary.visitDays + "天 阅读时间" + fmtDur(summary.timeRead) + " 浏览话题" + fmtK(summary.topicsEntered),
-                    "已读帖子" + fmtK(summary.postsRead) + " 创建话题" + summary.topicsCreated + " 创建帖子" + summary.postsCreated
+                    "访问" + (summary.visitDays ?? "？") + "天 阅读时间" + fmtDur(summary.timeRead) + " 浏览话题" + fmtK(summary.topicsEntered),
+                    "已读帖子" + fmtK(summary.postsRead) + " 创建话题" + (summary.topicsCreated ?? "？") + " 创建帖子" + (summary.postsCreated ?? "？")
                 ];
             }
             if (summaryState === "loading") return ["摘要读取中…", ""];
@@ -3649,7 +3731,7 @@
         throw new Error("等级条件本次未取全，保留网站已有数据");
     }
     function currentForumPatch(since, username) {
-        const fresh = function (at) { return at >= since && at <= Date.now() && Date.now() - at <= 600000; };
+        const fresh = function (at) { return at >= since && at <= Date.now() && Date.now() - at <= 600000 && sameServiceDay(at, Date.now()); };
         const patch = { trust_level: me.trustLevel, value_times: { trust_level: forumIdentityAt } };
         const grade = readTL3();
         if (grade && fresh(grade.at) && normUser(grade.account) === username) {
@@ -3665,7 +3747,7 @@
             patch.summary_at = patch.grade_at = cachedSummary.at; patch.grade_status = "summary_only";
         }
         const credit = readCreditCache(username), access = creditAccess(username);
-        if (access && fresh(access.at)) {
+        if (access?.status === "ok" && fresh(access.at)) {
             patch.ldc_status = access.status; patch.ldc_status_at = access.at; patch.ldc_error = access.error;
             if (access.status === "level_required") patch.ldc_required_level = 3;
         }
@@ -3721,6 +3803,9 @@
             me = u;
             forumIdentityAt = Date.now();
             if (!user) { render(); return; }
+            if (accountState === "authenticated" && Number.isInteger(me.trustLevel) && me.trustLevel >= 0 && me.trustLevel <= 3) {
+                queueForumPatch(user, { trust_level: me.trustLevel, value_times: { trust_level: forumIdentityAt } }).catch(function () {});
+            }
             if (oldUser && oldUser !== user) {
                 [AR.DAYKEY, AR.REWARDKEY, AR.NOTEKEY, AR.UIDKEY, AR.BALKEY, AR.BALDAY, AR.SIDEKEY, AR.FLOW, AR.AUTOKEY].forEach(gmDel);
             }
@@ -3729,11 +3814,11 @@
             const saved = loadArNote();
             if (saved && arState !== "running") { arState = saved.state; arText = saved.text; arBal = saved.bal; }
             render();
-            if (forumOnly() || onlyIdentity) return;
+            if (forumOnly() || onlyIdentity || managedByPython()) return;
             if (isLowTL()) loadSummary(false);
             else {
                 const cached = readTL3();
-                if (!cached || Date.now() - Number(cached.at || 0) > SYNC_THROTTLE_MS) sync();
+                if (!cached || !sameServiceDay(Number(cached.at || 0), Date.now()) || Date.now() - Number(cached.at || 0) > SYNC_THROTTLE_MS) sync();
             }
             if (!managedByPython() && !forumOnly()) {
                 let checks=0;
