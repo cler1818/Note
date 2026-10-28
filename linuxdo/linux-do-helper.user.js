@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.4.0
+// @version      1.4.1
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -573,7 +573,7 @@
         if (!u) return false;
         if (fallbackUser && normUser(fallbackUser) !== u) return false;
         try { GM_setValue("ld_tl3_" + u, JSON.stringify(data)); } catch (_) { return false; }
-        publishGradeSuccess(data, fallbackUser);
+        cacheGradeSuccess(data, fallbackUser);
         return true;
     }
 
@@ -610,7 +610,7 @@
 
     const NO_OAUTH_PREFIX = "ldh_no_oauth_";
     const WEBSITE_SYNC = { endpoint: "https://any.909724.xyz/api/userscript-account-sync", admin: "https://any.909724.xyz/lzhp529",
-        key: "ldh_forum_sync_key", pending: "ldh_forum_sync_outbox_v1", entry: "ldh_forum_sync_entry_", recovery: "ldh_agent_recovery_" };
+        key: "ldh_forum_sync_key", recovery: "ldh_agent_recovery_" };
     const FORUM_SUCCESS_PREFIX = "ldh_forum_success_v140_";
     const SUCCESS_METRICS = ["visit_days", "topics_viewed", "posts_viewed", "topics_replied", "likes_given", "likes_received", "liked_days", "liked_by_users"];
     const SUCCESS_COMPLIANCE = ["reported_posts", "users_reported", "muted", "banned"];
@@ -646,7 +646,7 @@
     function currentForumSuccess(username, now) {
         const user = normUser(username); now = now || Date.now();
         const saved = gmGet(FORUM_SUCCESS_PREFIX + user, null);
-        const row = { version: "1.4.0", username: user, day: todayStr(now), value_times: {}, metrics: {}, metric_times: {}, compliance: {}, compliance_times: {}, summary: {}, summary_times: {} };
+        const row = { version: "1.4.1", username: user, day: todayStr(now), value_times: {}, metrics: {}, metric_times: {}, compliance: {}, compliance_times: {}, summary: {}, summary_times: {} };
         if (!saved || saved.username !== user) return row;
         for (const name of ["trust_level", "agent", "ldc"]) {
             const at = saved.value_times?.[name];
@@ -659,21 +659,20 @@
         }
         return row;
     }
-    function publishGradeSuccess(data, fallbackUser) {
+    function cacheGradeSuccess(data, fallbackUser) {
         const user = normUser(data?.account), expected = normUser(fallbackUser);
         if (!user || (expected && user !== expected) || data.locked || !successTime(data.at, Date.now())) return;
         const metrics = {}, compliance = {};
         for (const key of SUCCESS_METRICS) { const value = data.metrics?.[key]; if (value && successNumber(value.c) && successNumber(value.r)) metrics[key] = value; }
         for (const key of SUCCESS_COMPLIANCE) { if (successNumber(data.compliance?.[key])) compliance[key] = data.compliance[key]; }
-        if (Object.keys(metrics).length || Object.keys(compliance).length) queueForumPatch(user, { metrics, compliance, grade_at: data.at, grade_status: "captured" }).catch(function () {});
+        if (Object.keys(metrics).length || Object.keys(compliance).length) rememberForumSuccess(user, { metrics, compliance, grade_at: data.at, grade_status: "captured" });
     }
-    function publishSummarySuccess(username, data, at) {
+    function cacheSummarySuccess(username, data, at) {
         const values = {};
         for (const [key, name] of Object.entries(SUCCESS_SUMMARY)) if (successNumber(data?.[key])) values[name] = data[key];
-        if (Object.keys(values).length && successTime(at, Date.now())) queueForumPatch(username, { summary: values, summary_at: at, grade_at: at, grade_status: "summary_only" }).catch(function () {});
+        if (Object.keys(values).length && successTime(at, Date.now())) rememberForumSuccess(username, { summary: values, summary_at: at, grade_at: at, grade_status: "summary_only" });
     }
 
-    let websiteJob = null;
     async function websiteRequest(payload) {
         const key = String(gmGet(WEBSITE_SYNC.key, "") || gmGet("ldh_any_import_key", "") || "").trim();
         const headers = { "Content-Type": "application/json" };
@@ -691,50 +690,6 @@
         if (response.status < 200 || response.status >= 300 || !result?.ok) throw new Error(result?.message || "网站同步失败");
         return result;
     }
-    function websiteOutbox() {
-        const legacy = gmGet(WEBSITE_SYNC.pending, []);
-        if (Array.isArray(legacy) && legacy.length) {
-            legacy.forEach(function (row) { if (row?.id && row.patch) gmSet(WEBSITE_SYNC.entry + row.id, row); });
-            gmDel(WEBSITE_SYNC.pending);
-        }
-        return GM_listValues().filter(function (key) { return key.startsWith(WEBSITE_SYNC.entry); })
-            .map(function (key) { return gmGet(key, null); }).filter(function (row) { return row?.id && row.patch; })
-            .sort(function (a, b) { return a.patch.observed_at - b.patch.observed_at || a.id.localeCompare(b.id); });
-    }
-    function flushWebsiteOutbox() {
-        if (websiteJob) return websiteJob;
-        websiteJob = (async function () {
-            let result = null;
-            const attempted = new Set();
-            let failure = null;
-            for (let n = 0; n < 100; n++) {
-                const entry = websiteOutbox().find(function (row) { return !attempted.has(row.id); });
-                if (!entry) break;
-                attempted.add(entry.id);
-                try {
-                    result = await websiteRequest({ account_info: entry.patch });
-                    if (result.skipped?.includes("account_info")) throw new Error("网站账号身份已变更，请重新采集");
-                    gmDel(WEBSITE_SYNC.entry + entry.id);
-                } catch (error) { failure = error; }
-            }
-            if (failure) throw failure;
-            return result;
-        })().finally(function () { websiteJob = null; });
-        return websiteJob;
-    }
-    function queueForumPatch(username, values) {
-        const user = normUser(username);
-        if (!user) return Promise.reject(new Error("论坛用户名未确认"));
-        rememberForumSuccess(user, values);
-        const patch = Object.assign({}, values, { username: user, login_status: "authenticated", observed_at: Date.now() });
-        if (values.grade_at || values.summary_at) patch.cache_source = "userscript";
-        const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
-        gmSet(WEBSITE_SYNC.entry + id, { id: id, patch: patch });
-        return flushWebsiteOutbox();
-    }
-    function publishAgentDenial(user, at) {
-        queueForumPatch(user, { no_oauth: true, oauth_at: at, agent_denied_reason: NO_OAUTH_TEXT }).catch(function () {});
-    }
     async function syncAgentPolicy(username) {
         const user = normUser(username);
         try {
@@ -748,19 +703,14 @@
     }
     try { GM_registerMenuCommand("设置论坛资料同步密钥", function () {
         const key = prompt("输入 Python 的网站同步密钥，也可使用已有查询网站导入密钥：", "");
-        if (key?.trim()) { gmSet(WEBSITE_SYNC.key, key.trim()); flushWebsiteOutbox().catch(function (error) { ldhToast(error.message, "error"); }); }
+        if (key?.trim()) gmSet(WEBSITE_SYNC.key, key.trim());
     }); } catch (_) {}
-    setTimeout(function () { if (websiteOutbox().length) flushWebsiteOutbox().catch(function () {}); }, 3000);
-    setInterval(function () { if (websiteOutbox().length) flushWebsiteOutbox().catch(function () {}); }, 60000);
 
     function creditAccessKey(user) { return "ldh_credit_access_" + normUser(user); }
     function creditAccess(user) { const row = gmGet(creditAccessKey(user), null); return row && row.username === normUser(user) ? row : null; }
     function saveCreditAccess(user, status, error, at, currentLevel) {
         const row = { username: normUser(user), status: status, error: error || "", at: at || Date.now(), currentLevel: currentLevel };
         gmSet(creditAccessKey(user), row);
-        const patch = { ldc_status: status, ldc_status_at: row.at, ldc_error: row.error };
-        if (status === "level_required") patch.ldc_required_level = 3;
-        queueForumPatch(user, patch).catch(function () {});
         return row;
     }
     function creditFlow() { const flow = gmGet(CREDIT.FLOW, null); return flow && Date.now() - flow.startedAt < CREDIT.TAB_TIMEOUT + 2000 ? flow : null; }
@@ -832,7 +782,6 @@
             locked: true, agentOnly: true, from: from || "", tl: (typeof tl === "number" ? tl : null), at: at || Date.now()
         }));
         _noOauthCache = { key: "", at: 0, v: null };
-        if (!silent) publishAgentDenial(name, at || Date.now());
         console.warn("[LDH] @" + name + " 已标青春版，停止自动 Agent，LDC 独立获取");
     }
     function clearNoOauth(u, at) {
@@ -2263,7 +2212,7 @@
         else if (!forumStableAt) forumStableAt = Date.now();
         if (running && !ready && ((!forumReadChecks && forumChallenge()) || document.querySelector("#challenge-form,#cf-challenge-running"))) stopEngine(forumChallengeError().message,"challenge");
         const last = readJson("ld_helper_last",null);
-        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.4.0",user:me.username,
+        document.documentElement.setAttribute("data-ldh-health",JSON.stringify({version:"1.4.1",user:me.username,
             account:accountState,ready:ready && Date.now()-forumStableAt>=8000,challenge:!!forumChallenge(),
             holdUntil:0,running:running,startedAt:startedAt,deadline:startedAt+totalMs(),
             sent:Object.assign({},sent),settings:runSettings ? Object.assign({},runSettings) : null,
@@ -2275,6 +2224,17 @@
             if(cmd.action==="start")startMode(cmd.mode||"daily");
             else if(cmd.action==="stop")stopEngine("Python 请求停止","stopped");
             else if(cmd.action==="probe"&&!running)refreshForumUser(true);
+            else if(cmd.action==="invite"&&!running) {
+                const id = String(cmd.id || ""), expected = normUser(cmd.username);
+                if (!id || inviteBusy) return;
+                inviteBusy = true;
+                document.documentElement.setAttribute("data-ldh-invite-result", JSON.stringify({ id, status: "running" }));
+                getInviteLink(expected).then(function (item) {
+                    document.documentElement.setAttribute("data-ldh-invite-result", JSON.stringify(Object.assign({ id, status: "ok" }, item)));
+                }).catch(function (error) {
+                    document.documentElement.setAttribute("data-ldh-invite-result", JSON.stringify({ id, status: "failed", error: error.message }));
+                }).finally(function () { inviteBusy = false; });
+            }
             else if(cmd.action==="daily_data") {
                 const user = normUser(me.username);
                 const valid = accountState === "authenticated" && user && user === normUser(currentLdUser());
@@ -2407,8 +2367,10 @@
                 if (settled) return; settled = true; clearInterval(timer); clearTimeout(deadline);
                 if (creditFlow()?.id === id) gmDel(CREDIT.FLOW);
                 const finish = function () { releaseTabLock(); if (error) reject(error); else resolve(info); };
-                if (error) finish();
-                else setTimeout(function () { try { handle.close(); } catch (_) {} finish(); }, 1000);
+                if (error) {
+                    if (["level_required", "group_denied"].includes(error.creditStatus)) { try { handle?.close(); } catch (_) {} }
+                    finish();
+                } else setTimeout(function () { try { handle.close(); } catch (_) {} finish(); }, 1000);
             }
             try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1&ldh_credit_flow=" + encodeURIComponent(id), { active: true, insert: true, setParent: true }); }
             catch (_) { done(new Error("无法打开 Credit 标签")); return; }
@@ -2455,7 +2417,7 @@
             writeCreditCache(user, info.balance, at);
             ldc = { state: "ok", value: info.balance, msg: "已核验 Credit 当前账号和最新余额" };
             gmSet(creditAccessKey(user), { username: user, status: "ok", error: "", at: at });
-            queueForumPatch(user, { ldc: info.balance, value_times: { ldc: at }, ldc_status: "ok", ldc_status_at: at, ldc_error: "" }).catch(function () {});
+            rememberForumSuccess(user, { ldc: info.balance, value_times: { ldc: at }, ldc_status: "ok", ldc_status_at: at, ldc_error: "" });
         } catch (error) {
             if (normUser(me.username) !== user) return;
             const status = error.creditStatus || "failed";
@@ -2505,7 +2467,7 @@
             if (me.username !== user) return;
             const at = Date.now(); writeJson(key, { at: at, data: s });
             summary = s; summaryState = "ok"; render();
-            publishSummarySuccess(user, s, at);
+            cacheSummarySuccess(user, s, at);
         }).catch(function () {
             if (me.username !== user) return;
             summary = null; summaryState = "fail"; render();
@@ -2581,8 +2543,21 @@
     function csrfMeta() { const m = document.querySelector('meta[name="csrf-token"]'); return m ? m.getAttribute("content") : ""; }
     async function getCsrf(signal, force) { let t = force ? "" : csrfMeta(); if (t) return t; try { const r = await fetchTimed("/session/csrf.json", { signal: signal, credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } }); if (r.ok) t = (await r.json()).csrf || ""; } catch (_) {} return t; }
 
-    async function getUser(signal) {
+    function initialDocumentUser() {
+        if (auxiliaryChallenge() || isLoginView()) return null;
+        try {
+            const el = document.querySelector("#data-preloaded");
+            const pre = JSON.parse(el?.getAttribute("data-preloaded") || el?.textContent || "{}");
+            const raw = typeof pre.currentUser === "string" ? JSON.parse(pre.currentUser) : pre.currentUser;
+            if (!raw || !/^[A-Za-z0-9_.-]{1,64}$/.test(raw.username || "")) return null;
+            const level = Number(raw.trust_level);
+            return { username: raw.username, trustLevel: raw.trust_level != null && Number.isInteger(level) && level >= 0 && level <= 3 ? level : null };
+        } catch (_) { return null; }
+    }
+    async function getUser(signal, initialDocument) {
         accountError = "";
+        const documentUser = initialDocument ? initialDocumentUser() : null;
+        if (documentUser) { accountState = "authenticated"; forumAuthAt = Date.now(); return documentUser; }
         try {
             const r = await fetchTimed("/session/current.json", { signal: signal,
                 ldhPace: running ? { deadline: startedAt + totalMs() } : {},
@@ -3024,7 +2999,7 @@
         if (engineController) { engineController.abort(); engineController = null; }
         wakeAll(); frozenTimer = "⏱ " + mmss(used); endNote = note || ""; activeMode = "";
         document.documentElement.removeAttribute("data-ldh-run-until");
-        writeJson("ld_helper_last", { version: "1.4.0", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
+        writeJson("ld_helper_last", { version: "1.4.1", user: normUser(me.username), at: Date.now(), startedAt: startedAt, mode: mode, reason: reason, success: anyActionDone(),
             warnings: runWarnings.slice(), settings: Object.assign({}, runSettings), sent: Object.assign({}, sent), batches:batchEvidence.slice(), requests:requestEvidence.slice(),
             scan: { pages: pool.pages, skipped: pool.skipped, unknown: pool.unknown, filteredReplies: pool.filteredReplies, minRepliesExclusive: MIN_TOPIC_REPLIES_EXCLUSIVE }, frozen: frozenTimer, endNote: endNote });
         restoreButtons(); resumeIdleWork(); render();
@@ -3115,7 +3090,7 @@
             return arBalance(null, { retries: 3 }).then(function (bal) {
                 if (normUser(me.username) !== expectedUser) return;
                 agentObservedAt = Date.now();
-                queueForumPatch(expectedUser, { agent: bal, value_times: { agent: agentObservedAt } }).catch(function () {});
+                rememberForumSuccess(expectedUser, { agent: bal, value_times: { agent: agentObservedAt } });
                 arState = "ok"; arText = arSuccessText(); arBal = bal;
                 gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
@@ -3145,7 +3120,7 @@
                 agentObservedAt = Date.now();
                 const patch = { agent: bal, value_times: { agent: agentObservedAt } };
                 if (manual) { clearNoOauth(expectedUser, agentObservedAt); patch.no_oauth = false; patch.oauth_at = agentObservedAt; patch.agent_manual_recovered = true; }
-                queueForumPatch(expectedUser, patch).catch(function () {});
+                rememberForumSuccess(expectedUser, patch);
                 gmSet(AR.BALKEY, bal); gmSet(AR.BALDAY, today);
                 saveArNote(arState, arText, arBal);
                 render();
@@ -3180,7 +3155,7 @@
             if (!sameServiceDay(Number(v.at || 0), Date.now()) || !/^\$\d+(?:\.\d+)?$/.test(String(v.bal))) return;
             if (v.at <= agentObservedAt) return;
             agentObservedAt = v.at;
-            queueForumPatch(me.username, { agent: v.bal, value_times: { agent: v.at } }).catch(function () {});
+            rememberForumSuccess(me.username, { agent: v.bal, value_times: { agent: v.at } });
             if (v.bal === arBal) return;
             arBal = v.bal;
             gmSet(AR.BALKEY, v.bal); gmSet(AR.BALDAY, todayStr());
@@ -3672,21 +3647,20 @@
         if (!ok) throw new Error("浏览器拒绝写入剪贴板");
     }
 
+    async function getInviteLink(expectedUser) {
+        const user = await inviteCurrentUser();
+        if (expectedUser && user.username !== normUser(expectedUser)) throw new Error("论坛账号已变化，停止获取邀请链接");
+        let link = invitePickPending(await invitePending(user.username)), created = false;
+        if (!link) { link = await inviteCreate(user); created = true; }
+        return { username: user.username, link, created, acquired_at: Date.now() };
+    }
     async function runInvite(btn) {
         if (inviteBusy) return;
         inviteBusy = true;
         if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; btn.style.cursor = "wait"; }
         ldhToast("正在获取邀请链接…", "info");
         try {
-            const user = await inviteCurrentUser();
-            let link = invitePickPending(await invitePending(user.username));
-            let created = false;
-            if (!link) {
-
-                ldhToast("没有找到未使用的待处理邀请，正在检查生成资格…", "info");
-                link = await inviteCreate(user);
-                created = true;
-            }
+            const { link, created } = await getInviteLink();
 
             try {
                 await inviteCopy(link);
@@ -3747,7 +3721,7 @@
             patch.summary_at = patch.grade_at = cachedSummary.at; patch.grade_status = "summary_only";
         }
         const credit = readCreditCache(username), access = creditAccess(username);
-        if (access?.status === "ok" && fresh(access.at)) {
+        if (access && ["ok", "level_required", "group_denied", "failed"].includes(access.status) && fresh(access.at)) {
             patch.ldc_status = access.status; patch.ldc_status_at = access.at; patch.ldc_error = access.error;
             if (access.status === "level_required") patch.ldc_required_level = 3;
         }
@@ -3779,7 +3753,23 @@
             await refreshCredit(true);
             if (!getNoOauth(username)) await runArCheckin(true, false);
             if (normUser(me.username) !== username) throw new Error("论坛账号已变化，停止本次上传");
-            const result = await queueForumPatch(username, currentForumPatch(since, username));
+            const refreshed = currentForumPatch(since, username);
+            rememberForumSuccess(username, refreshed);
+            const patch = Object.assign(currentForumSuccess(username), refreshed, {
+                username: username, login_status: "authenticated", observed_at: Date.now(), cache_source: "userscript"
+            });
+            const cached = currentForumSuccess(username);
+            patch.value_times = Object.assign({}, cached.value_times, refreshed.value_times);
+            for (const name of ["metrics", "compliance", "summary"]) if (Object.keys(cached[name]).length) patch[name] = cached[name];
+            if (Object.keys(cached.metrics).length || Object.keys(cached.compliance).length) {
+                patch.grade_at = Math.max(0, ...Object.values(cached.metric_times), ...Object.values(cached.compliance_times));
+                patch.grade_status = "captured";
+            } else if (Object.keys(cached.summary).length) {
+                patch.summary_at = Math.max(...Object.values(cached.summary_times));
+                patch.grade_at = patch.summary_at; patch.grade_status = "summary_only";
+            }
+            const result = await websiteRequest({ account_info: patch });
+            if (result.skipped?.includes("account_info")) throw new Error("网站账号身份已变更，请重新采集后点击用户名上传");
             if (ldc.state !== "ok") errors.push(ldc.msg || "LDC 本次未取到");
             if (!getNoOauth(username) && arState !== "ok") errors.push(arText || "Agent 本次未取到");
             ldhToast((result?.message || "账号资料已同步网站") + (errors.length ? "；" + errors.join("；") : ""), errors.length ? "info" : "success");
@@ -3791,7 +3781,7 @@
     let forumUserJob = null;
     function refreshForumUser(force, onlyIdentity) {
         if (forumUserJob) return force ? forumUserJob.then(function () { return refreshForumUser(false, onlyIdentity); }) : forumUserJob;
-        forumUserJob = getUser().then(async function (u) {
+        forumUserJob = getUser(undefined, !force && !forumIdentityAt).then(async function (u) {
             if (!u.username && accountState !== "anonymous") { render(); return; }
             const oldUser = currentLdUser(), user = normUser(u.username);
             if (normUser(me.username) !== user) {
@@ -3804,13 +3794,13 @@
             forumIdentityAt = Date.now();
             if (!user) { render(); return; }
             if (accountState === "authenticated" && Number.isInteger(me.trustLevel) && me.trustLevel >= 0 && me.trustLevel <= 3) {
-                queueForumPatch(user, { trust_level: me.trustLevel, value_times: { trust_level: forumIdentityAt } }).catch(function () {});
+                rememberForumSuccess(user, { trust_level: me.trustLevel, value_times: { trust_level: forumIdentityAt } });
             }
             if (oldUser && oldUser !== user) {
                 [AR.DAYKEY, AR.REWARDKEY, AR.NOTEKEY, AR.UIDKEY, AR.BALKEY, AR.BALDAY, AR.SIDEKEY, AR.FLOW, AR.AUTOKEY].forEach(gmDel);
             }
             gmSet(LD_USER_KEY, user);
-            await syncAgentPolicy(user);
+            render(); publishHealth();
             const saved = loadArNote();
             if (saved && arState !== "running") { arState = saved.state; arText = saved.text; arBal = saved.bal; }
             render();
