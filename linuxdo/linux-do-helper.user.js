@@ -2225,6 +2225,7 @@
     let readLedger = {};
     const processedTopics = new Set();
     let forumStableAt = 0, forumAuthAt = 0, sideAllowed = false;
+    let forumRecoveryAt = 0, forumSideTask = null;
     function managedByPython() {
         return sessionStorage.getItem("ldh_python_managed") === "1" &&
             sessionStorage.getItem("ldh_python_managed_document") === String(performance.timeOrigin);
@@ -2256,6 +2257,40 @@
             holdUntil:0,running:running,startedAt:startedAt,deadline:startedAt+totalMs(),
             sent:Object.assign({},sent),settings:runSettings ? Object.assign({},runSettings) : null,
             success:anyActionDone(),warningCount:runWarnings.length,stage:runStage,error:accountError,sideReady:forumSideReady(),forumOnly:forumOnly(),last:last}));
+        recoverForumIdentity();
+        continueForumSide();
+    }
+    function recoverForumIdentity() {
+        // 恢复后的论坛需用实时会话解除旧 CF 标记；请求仍遵守论坛公共节流。
+        if (location.hostname !== "linux.do" || managedByPython() || running || forumUserJob ||
+            accountState === "anonymous" || accountState === "authenticated" && !forumChallenge() ||
+            !document.querySelector("#main-outlet,.topic-list,.topic-body") || auxiliaryChallenge() || isLoginView() ||
+            Date.now() - forumRecoveryAt < 30000) return;
+        forumRecoveryAt = Date.now();
+        refreshForumUser(false).catch(function () {});
+    }
+    function queueForumSide(user, force) {
+        const key = user + "/" + todayStr();
+        if (forumSideTask && forumSideTask.key === key && (!force || forumSideTask.busy)) return;
+        forumSideTask = { key:key, user:user, sync:false, credit:false, agent:false, busy:false };
+    }
+    function continueForumSide() {
+        // 等待不限于打开后的前 60 秒；只继续尚未启动的阶段，不重复成功或失败的请求。
+        const task = forumSideTask;
+        if (!task || task.busy || task.credit && task.agent || managedByPython() || !forumSideReady()) return;
+        if (normUser(me.username) !== task.user) { forumSideTask = null; return; }
+        const current = function () { return forumSideTask === task && normUser(me.username) === task.user; };
+        task.busy = true;
+        Promise.resolve().then(async function () {
+            if (!current() || !forumSideReady()) return;
+            if (!task.sync) { task.sync = true; sync(); }
+            if (!task.credit) {
+                task.credit = true;
+                try { await refreshCredit(false); } catch (_) {}
+            }
+            if (!current() || managedByPython() || !forumSideReady()) return;
+            if (!task.agent) { task.agent = true; await runArCheckin(false); }
+        }).catch(function () {}).finally(function () { task.busy = false; });
     }
     function initPythonBridge() {
         document.addEventListener("ldh-command",function(e){
@@ -2603,7 +2638,9 @@
     }
     async function getUser(signal, initialDocument) {
         accountError = "";
-        const documentUser = initialDocument ? initialDocumentUser() : null;
+        forumRecoveryAt = Date.now();
+        // 页面预载身份不能解除另一轮请求留下的 CF 标记，存在标记时必须检查实时会话。
+        const documentUser = initialDocument && !forumChallenge() ? initialDocumentUser() : null;
         if (documentUser) { accountState = "authenticated"; forumAuthAt = Date.now(); return documentUser; }
         try {
             const r = await fetchTimed("/session/current.json", { signal: signal,
@@ -3308,8 +3345,11 @@
         if (arState === "pending") return base + 'color:#e0c060;" title="' + esc(arText || "签到已成功，余额读取失败，点击重试") + '">' + SP3 + "Agent：待刷新</span>";
         if (arState === "fail") return base + 'color:#ff8a8a;" title="' + esc(arText || "签到失败") + '">' + SP3 + "Agent：失败</span>";
         if (arState === "ok" && arBal) return base + 'color:#8fe0b0;" title="' + esc(arText + "；点击重新登录签到") + '">' + SP3 + "Agent：" + esc(arBal) + "</span>";
-        if (arState === "ok") return base + 'color:#e0c060;" title="今日登录签到已处理，余额读取中">' + SP3 + "Agent：获取中</span>";
-        return base + 'color:#888;" title="点击签到">' + SP3 + "Agent：获取中</span>";
+        if (arState === "ok") return base + 'color:#e0c060;" title="今日登录签到已处理，未取得余额，点击重试">' + SP3 + "Agent：待刷新</span>";
+        const pending = !forumSurfaceReady() || !forumStableAt || Date.now() - forumStableAt < 8000 || !forumAuthAt;
+        const automatic = forumSideTask && forumSideTask.user === normUser(me.username) && !forumSideTask.agent;
+        return base + 'color:#888;" title="' + esc(pending ? "论坛就绪后自动读取 Agent" : managedByPython() && !sideAllowed ? "等待 Python 调用" : automatic ? "等待 LDC 完成后自动读取 Agent" : "点击签到") + '">' + SP3 +
+            (pending ? "Agent：待论坛就绪" : managedByPython() && !sideAllowed ? "Agent：待调用" : automatic ? "Agent：待获取" : "Agent：点击获取") + "</span>";
     }
 
     const START_FAIL = ["未登录", "无CSRF"];
@@ -3935,20 +3975,13 @@
             if (saved && arState !== "running") { arState = saved.state; arText = saved.text; arBal = saved.bal; }
             render();
             if (forumOnly() || onlyIdentity || managedByPython()) return;
+            queueForumSide(user, !!force);
             if (isLowTL()) loadSummary(false);
             else {
                 const cached = readTL3();
                 if (!cached || !sameServiceDay(Number(cached.at || 0), Date.now()) || Date.now() - Number(cached.at || 0) > SYNC_THROTTLE_MS) sync();
             }
-            if (!managedByPython() && !forumOnly()) {
-                let checks=0;
-                const sideWait=setInterval(function(){
-                    if(normUser(me.username)!==user || ++checks>60){clearInterval(sideWait);return;}
-                    if(!forumSideReady())return;
-                    clearInterval(sideWait);sync();
-                    refreshCredit(false).then(function(){if(forumSideReady())return runArCheckin(false);}).catch(function(){});
-                },1000);
-            }
+            continueForumSide();
         }).finally(function () { forumUserJob = null; });
         return forumUserJob;
     }
