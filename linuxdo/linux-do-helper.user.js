@@ -934,7 +934,7 @@
     }
     function arFlowCurrent(id) {
         const flow = gmGet(AR.FLOW, null);
-        return flow && flow.id === id && Date.now() - flow.ts < 3 * 60 * 1000 ? flow : null;
+        return flow && flow.id === id && (!flow.expectedUser || normUser(flow.expectedUser) === currentLdUser()) && Date.now() - flow.ts < 3 * 60 * 1000 ? flow : null;
     }
     function arPageFlow(flow) {
         if (!arFlowCurrent(flow.id)) return;
@@ -999,8 +999,9 @@
     }
     function arFallbackTab(say, withLogout, manual) {
         return new Promise(function (resolve, reject) {
-            const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
-            gmSet(AR.FLOW, { id: id, step: "start", ts: Date.now(), withLogout: !!withLogout, manual: manual === true, expectedUser: currentLdUser() });
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2), user = currentLdUser();
+            if (location.hostname === "linux.do" && !forumSideReady()) return reject(Object.assign(new Error("论坛未就绪，暂缓 Agent 授权"), { sideDeferred: true }));
+            gmSet(AR.FLOW, { id: id, step: "start", ts: Date.now(), withLogout: !!withLogout, manual: manual === true, expectedUser: user });
             markAutoLogin(AR.AUTOKEY);
             let handle = null, timer = null;
             let finished = false;
@@ -1011,12 +1012,13 @@
                 try { if (!error && handle) handle.close(); } catch (_) {}
                 if (error) reject(error); else resolve(value);
             }
-            try { if(location.hostname === "linux.do" && !forumSideReady())throw new Error("论坛未就绪，暂缓 Agent 授权"); handle = GM_openInTab(AR.HOST + "/?ar_auto=1", { active: true, insert: true, setParent: true }); }
+            try { handle = GM_openInTab(AR.HOST + "/?ar_auto=1", { active: true, insert: true, setParent: true }); }
             catch (_) { finish(new Error("无法打开 Agent 登录标签")); return; }
             if (!handle) { finish(new Error("无法打开 Agent 登录标签")); return; }
             say(withLogout ? "正在 Agent 页面退出并重新登录…" : "正在 Agent 页面确认登录状态…");
             const started = Date.now();
             timer = setInterval(function () {
+                if (currentLdUser() !== user || location.hostname === "linux.do" && normUser(me.username) !== user) { finish(new Error("论坛账号已变化，停止 Agent 授权")); return; }
                 const flow = arFlowCurrent(id);
                 if (flow && flow.step === "done") {
                     if (flow.noOauth) { finish(noOauthError()); return; }
@@ -2286,10 +2288,15 @@
             if (!task.sync) { task.sync = true; sync(); }
             if (!task.credit) {
                 task.credit = true;
-                try { await refreshCredit(false); } catch (_) {}
+                try { const result = await refreshCredit(false); if (result?.deferred) task.credit = false; }
+                catch (error) { if (error?.sideDeferred) task.credit = false; }
             }
             if (!current() || managedByPython() || !forumSideReady()) return;
-            if (!task.agent) { task.agent = true; await runArCheckin(false); }
+            if (!task.agent) {
+                task.agent = true;
+                try { const result = await runArCheckin(false); if (result?.deferred) task.agent = false; }
+                catch (error) { if (error?.sideDeferred) task.agent = false; }
+            }
         }).catch(function () {}).finally(function () { task.busy = false; });
     }
     function initPythonBridge() {
@@ -2432,7 +2439,7 @@
     }
 
     function creditForegroundLogin() {
-        if (!forumSideReady()) return Promise.reject(new Error("论坛未就绪，暂缓 Credit 授权"));
+        if (!forumSideReady()) return Promise.reject(Object.assign(new Error("论坛未就绪，暂缓 Credit 授权"), { sideDeferred: true }));
         if (!acquireTabLock()) return Promise.reject(new Error("另一个标签正在授权，稍后重试"));
         const user = normUser(me.username), id = uuid4(), startedAt = Date.now();
         gmSet(CREDIT.FLOW, { id: id, username: user, startedAt: startedAt, status: "opening" });
@@ -2467,12 +2474,19 @@
 
     let creditJob = null;
     function refreshCredit(manual) {
+        const user = normUser(me.username);
+        if (creditJob) return creditJob.user === user ? creditJob.promise : creditJob.promise.catch(function () {}).then(function () {
+            if (normUser(me.username) !== user) return { cancelled: true };
+            return refreshCredit(manual);
+        });
         if (!(manual ? manualForumSideReady() : forumSideReady())) {
             if (manual) ldhToast(forumOnly() ? "本次仅处理论坛，LDC 已跳过" : "论坛页面尚未就绪，完成验证后点击 LDC 重试", "info");
-            return Promise.resolve();
+            return Promise.resolve({ deferred: true });
         }
-        if (!creditJob) creditJob = refreshCreditOnce(manual).finally(function () { creditJob = null; });
-        return creditJob;
+        const job = { user: user, promise: null };
+        creditJob = job;
+        job.promise = refreshCreditOnce(manual).finally(function () { if (creditJob === job) creditJob = null; });
+        return job.promise;
     }
     async function refreshCreditOnce(manual) {
         const user = normUser(me.username);
@@ -2488,7 +2502,10 @@
             if (manual) info = await creditForegroundLogin();
             else {
                 try { info = await creditUserInfo(CREDIT.API_TIMEOUT); }
-                catch (_) { info = await creditForegroundLogin(); }
+                catch (_) {
+                    if (normUser(me.username) !== user) return { cancelled: true };
+                    info = await creditForegroundLogin();
+                }
             }
             if (normUser(me.username) !== user || !info.id || normUser(info.username) !== user) throw Object.assign(new Error("论坛账号与 Credit 账号不一致"), { creditStatus: "account_mismatch" });
             const at = info.at || Date.now();
@@ -2498,6 +2515,10 @@
             rememberForumSuccess(user, { ldc: info.balance, value_times: { ldc: at }, ldc_status: "ok", ldc_status_at: at, ldc_error: "" });
         } catch (error) {
             if (normUser(me.username) !== user) return;
+            if (error.sideDeferred) {
+                ldc = { state: "idle", value: "", msg: error.message }; render();
+                return { deferred: true };
+            }
             const status = error.creditStatus || "failed";
             ldc = { state: status === "level_required" ? status : status === "account_mismatch" ? "mismatch" : "fail", value: "", msg: error.message || "Credit 本次取数失败" };
             if (status !== "account_mismatch") saveCreditAccess(user, status, ldc.msg, Date.now(), error.currentLevel);
@@ -2642,8 +2663,12 @@
         // 页面预载身份不能解除另一轮请求留下的 CF 标记，存在标记时必须检查实时会话。
         const documentUser = initialDocument && !forumChallenge() ? initialDocumentUser() : null;
         if (documentUser) { accountState = "authenticated"; forumAuthAt = Date.now(); return documentUser; }
+        // 登录查询的上限包含跨标签排队，避免等待锁时一直占用 forumUserJob；引擎仍使用自己的停止信号。
+        const lookup = signal ? null : new AbortController();
+        let lookupExpired = false;
+        const lookupTimer = lookup ? setTimeout(function () { lookupExpired = true; lookup.abort(); }, 20000) : null;
         try {
-            const r = await fetchTimed("/session/current.json", { signal: signal,
+            const r = await fetchTimed("/session/current.json", { signal: signal || lookup.signal,
                 ldhPace: running ? { deadline: startedAt + totalMs() } : {},
                 credentials: "same-origin", cache: "no-store", headers: running ? forumClientHeaders() :
                     { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
@@ -2673,10 +2698,10 @@
         } catch (e) {
             if (!signal || !signal.aborted) {
                 accountState = e && e.name === "ForumChallengeError" ? "challenge" : "unknown";
-                accountError = (e && e.name || "Error") + "：" + (e && e.message || "登录查询失败");
+                accountError = lookupExpired ? "登录查询排队或请求超时，请稍后重试" : (e && e.name || "Error") + "：" + (e && e.message || "登录查询失败");
                 writeJson("ldh_session_diagnostic", {at:Date.now(),message:accountError});
             }
-        }
+        } finally { clearTimeout(lookupTimer); }
         return { username: "", trustLevel: null };
     }
     function accountLabel() {
@@ -3149,18 +3174,27 @@
     let agentJob = null;
     function runArCheckin(force, manual) {
         const user = normUser(me.username);
-        if (agentJob) return agentJob.user === user ? agentJob.promise : agentJob.promise.then(function () { return runArCheckin(force, manual); });
+        if (agentJob) return agentJob.user === user ? agentJob.promise : agentJob.promise.catch(function () {}).then(function () {
+            if (normUser(me.username) !== user) return { cancelled: true };
+            return runArCheckin(force, manual);
+        });
         const job = { user: user, promise: null };
         agentJob = job;
         let pending;
         try { pending = runArCheckinOnce(force, manual); } catch (error) { pending = Promise.reject(error); }
-        job.promise = Promise.resolve(pending).finally(function () { if (agentJob === job) agentJob = null; });
+        job.promise = Promise.resolve(pending).catch(function (error) {
+            if (normUser(me.username) !== user) return;
+            arState = error?.sideDeferred ? "idle" : "fail"; arText = error?.message || String(error); arBal = "";
+            if (!error?.sideDeferred) saveArNote("fail", arText, "");
+            render();
+            if (error?.sideDeferred) return { deferred: true };
+        }).finally(function () { if (agentJob === job) agentJob = null; });
         return job.promise;
     }
     function runArCheckinOnce(force, manual) {
         manual = manual === undefined ? !!force : manual === true;
         const expectedUser = normUser(me.username);
-        if(!forumSideReady())return Promise.resolve();
+        if(!forumSideReady())return Promise.resolve({ deferred: true });
         if (!me.username) return Promise.resolve();
         if (arState === "running") return Promise.resolve();
         if (!manual && getNoOauth(me.username)) {
@@ -3202,7 +3236,7 @@
 
         arState = "running"; arText = "签到中…"; arBal = ""; render();
 
-        return arCheckin(function (s) { arText = s; }, manual).then(function (r) {
+        return arCheckin(function (s) { if (normUser(me.username) === expectedUser) arText = s; }, manual).then(function (r) {
             if (normUser(me.username) !== expectedUser) throw new Error("论坛账号已变化");
             if (r && r.checkedIn) gmSet(AR.REWARDKEY, today);
             const checkinText = arSuccessText();
@@ -3228,6 +3262,7 @@
             });
         }).catch(function (e) {
             if (normUser(me.username) !== expectedUser) return;
+            if (e?.sideDeferred) { arState = "idle"; arText = e.message; arBal = ""; render(); return { deferred: true }; }
             if (e && e.noOauth) {
                 saveNoOauth(me.username, "agentrouter", me.trustLevel);
                 arState = "nooauth"; arText = NO_OAUTH_MSG; arBal = "";
@@ -3911,14 +3946,20 @@
             } while (Date.now() < readyDeadline);
             const username = normUser(me.username);
             if (!username || accountState !== "authenticated" || forumIdentityAt < since) throw new Error("论坛登录身份未确认，完成验证后重试");
+            const confirmUser = function () {
+                if (normUser(me.username) !== username || accountState !== "authenticated") throw new Error("论坛账号已变化或登录未确认，停止本次上传");
+            };
             const deadline = Date.now() + 30000;
             while (!forumSideReady() && Date.now() < deadline) await arWait(500);
             if (!forumSideReady()) throw new Error("论坛页面仍待验证，完成后再点击用户名");
             await syncAgentPolicy(username);
+            confirmUser();
             try { await freshGrade(since, username); } catch (error) { errors.push(error.message); }
-            await refreshCredit(true);
-            if (!getNoOauth(username)) await runArCheckin(true, false);
-            if (normUser(me.username) !== username) throw new Error("论坛账号已变化，停止本次上传");
+            confirmUser();
+            try { await refreshCredit(true); } catch (error) { errors.push(error.message); }
+            confirmUser();
+            if (!getNoOauth(username)) { try { await runArCheckin(true, false); } catch (error) { errors.push(error.message); } }
+            confirmUser();
             const refreshed = currentForumPatch(since, username);
             rememberForumSuccess(username, refreshed);
             const patch = Object.assign(currentForumSuccess(username), refreshed, {
