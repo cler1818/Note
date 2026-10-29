@@ -2351,7 +2351,14 @@
             else if(cmd.action==="daily_data") {
                 const user = normUser(me.username);
                 const valid = accountState === "authenticated" && user && user === normUser(currentLdUser());
-                document.documentElement.setAttribute("data-ldh-daily-success-v140", JSON.stringify(valid ? currentForumSuccess(user) : { error: "当前账号未确认" }));
+                const row = valid ? currentForumSuccess(user) : { error: "当前账号未确认" };
+                if (valid) {
+                    const denied = getNoOauth(user), access = creditAccess(user);
+                    if (denied) { row.no_oauth = true; row.oauth_at = denied.at; }
+                    if (access) row.ldc_access = { status: access.status, error: access.error || "", at: access.at,
+                        currentLevel: access.currentLevel, requiredLevel: access.requiredLevel };
+                }
+                document.documentElement.setAttribute("data-ldh-daily-success-v140", JSON.stringify(row));
             }
             else if(cmd.action==="side"&&!forumOnly()&&forumSurfaceReady()){
                 sideAllowed=true;
@@ -3397,9 +3404,9 @@
     function ldcSpan() {
         if (!me.username) return "";
         if (forumOnly()) return '<span style="color:#aaa;" title="本次由 BAT 运行，仅处理论坛阅读/点赞">' + SP3 + "LDC：跳过</span>";
-        const base = '<span id="ldh_ldc" style="cursor:pointer;';
+        const base = '<span id="ldh_ldc" data-ldc-state="' + esc(ldc.state) + '" style="cursor:pointer;';
 
-        if (ldc.state === "level_required") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg) + '">' + SP3 + "LDC：失败（等待TL3）</span>";
+        if (ldc.state === "level_required") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg) + '">' + SP3 + "LDC：？</span>";
         if (ldc.state === "ok") {
             return base + 'color:#8fe0b0;" title="' + esc(ldc.msg || "可用 LINUX DO Credits，点击刷新") + '">' + SP3 + "LDC：" + esc(ldc.value) + "</span>";
         }
