@@ -18,6 +18,8 @@
 // @grant        GM_getValue
 // @grant        GM_listValues
 // @grant        GM_deleteValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM_openInTab
@@ -70,7 +72,7 @@
             const found = [];
             for (const root of roots) {
                 for (const el of root.querySelectorAll("*")) if (el.shadowRoot) roots.add(el.shadowRoot);
-                for (const el of root.querySelectorAll('input[type="checkbox"]')) if (el.isConnected && visible(el)) found.push(el);
+                for (const el of root.querySelectorAll('input[type="checkbox"],[role="checkbox"]')) if (el.isConnected && visible(el)) found.push(el);
             }
             return found;
         }
@@ -81,7 +83,8 @@
         function step() {
             if (stopped || Date.now() - started > 180000) { stop(); return; }
             const row = state(), items = controls();
-            if (items.some(function (el) { return el.checked; })) { set(key, Object.assign(row, { checked: true })); stop(); return; }
+            try { document.documentElement.setAttribute("data-ldh-cf-assist", JSON.stringify({ controls:items.length, clicks:row.clicks, elapsed:Date.now()-started, state:row.clicks>=2?"attempt_limit":items.length?"control_found":"waiting_control" })); } catch (_) {}
+            if (items.some(function (el) { return el.checked === true || el.getAttribute("aria-checked") === "true"; })) { set(key, Object.assign(row, { checked: true })); stop(); return; }
             const el = items.find(function (item) { return !item.disabled && item.getAttribute("aria-disabled") !== "true"; });
             if (!el || el !== candidate) { candidate = el; stableAt = Date.now(); return; }
             if (row.clicks >= 2) { stop(); return; }
@@ -162,6 +165,14 @@
     function gmGet(k, fb) { try { return GM_getValue(k, fb); } catch (_) { return fb; } }
     function gmSet(k, v) { try { GM_setValue(k, v); } catch (_) {} }
     function gmDel(k) { try { GM_deleteValue(k); } catch (_) {} }
+    function watchSharedFlow(key, changed) {
+        let listener = null, closed = false;
+        try { if (typeof GM_addValueChangeListener === "function") listener = GM_addValueChangeListener(key, function () { if (!closed) changed(); }); } catch (_) {}
+        return function () {
+            closed = true;
+            try { if (listener != null && typeof GM_removeValueChangeListener === "function") GM_removeValueChangeListener(listener); } catch (_) {}
+        };
+    }
 
     // 所有脚本发出的论坛请求共用节流；不调整指纹、代理或绕过验证。
     const FORUM_PACE = { gapMs: REQUEST_INTERVAL_SEC * 1000,
@@ -760,21 +771,35 @@
         const id = sessionStorage.getItem("ldh_credit_flow");
         const flow = creditFlow();
         if (!flow || flow.id !== id) return;
-        let busy = false, stopped = false;
+        let busy = false, stopped = false, failures = 0;
+        function failed(message) {
+            if (++failures < 3) return;
+            updateCreditFlow(flow, { status:"failed", error:message, updatedAt:Date.now() });
+            stopped = true; clearInterval(timer);
+        }
         async function step() {
             if (stopped || !creditFlow() || creditFlow().id !== id) { clearInterval(timer); return; }
-            if (busy || auxiliaryChallenge() || document.readyState === "loading") return;
+            if (auxiliaryChallenge()) { updateCreditFlow(flow, { status:"verifying", error:"Credit 等待网页验证，完成后继续获取", updatedAt:Date.now() }); return; }
+            if (busy || document.readyState === "loading") return;
             busy = true;
             try {
                 const response = await fetch("/api/v1/oauth/user-info", { credentials: "include", cache: "no-store",
                     headers: { "Accept": "application/json" }, signal: AbortSignal.timeout(10000) });
-                let body; try { body = await response.json(); } catch (_) { return; }
+                const text = await response.text();
+                let body; try { body = JSON.parse(text); } catch (_) {
+                    if (response.headers.get("cf-mitigated") === "challenge" || CF_CHALLENGE_RE.test(text)) {
+                        updateCreditFlow(flow, { status:"verifying", error:"Credit 接口等待网页验证，完成后继续获取", updatedAt:Date.now() });
+                    } else failed("Credit 接口未返回有效数据（HTTP " + response.status + "），点击 LDC 重试");
+                    return;
+                }
                 if (response.status === 401 || body?.error_msg === "未登录") {
                     if (location.pathname !== "/login") location.replace(CREDIT.HOST + "/login?ldh_credit_auto=1&ldh_credit_flow=" + encodeURIComponent(id));
                     return;
                 }
                 const user = body?.data, balance = Number(user?.available_balance);
-                if (!response.ok || body?.error_msg || !user?.id || !user?.username || user.available_balance == null || !Number.isFinite(balance) || balance < 0) return;
+                if (!response.ok || body?.error_msg || !user?.id || !user?.username || user.available_balance == null || !Number.isFinite(balance) || balance < 0) {
+                    failed(String(body?.error_msg || "Credit 账号或余额未确认")); return;
+                }
                 if (normUser(user.username) !== flow.username) {
                     updateCreditFlow(flow, { status: "account_mismatch", error: "Credit 账号与当前论坛账号不一致", at: Date.now() });
                 } else {
@@ -782,7 +807,7 @@
                         balance: balance.toFixed(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""), at: Date.now() });
                 }
                 stopped = true; clearInterval(timer);
-            } catch (_) {} finally { busy = false; }
+            } catch (_) { failed("Credit 网络请求失败或超时，点击 LDC 重试"); } finally { busy = false; }
         }
         const timer = setInterval(step, 2000); step();
     }
@@ -1003,21 +1028,23 @@
             if (location.hostname === "linux.do" && !forumSideReady()) return reject(Object.assign(new Error("论坛未就绪，暂缓 Agent 授权"), { sideDeferred: true }));
             gmSet(AR.FLOW, { id: id, step: "start", ts: Date.now(), withLogout: !!withLogout, manual: manual === true, expectedUser: user });
             markAutoLogin(AR.AUTOKEY);
-            let handle = null, timer = null;
+            let handle = null, timer = null, deadline = null, unwatch = function () {};
             let finished = false;
             function finish(error, value) {
                 if (finished) return; finished = true;
-                clearInterval(timer);
-                if (arFlowCurrent(id)) gmDel(AR.FLOW);
+                clearInterval(timer); clearTimeout(deadline); unwatch(); window.removeEventListener("pagehide", onHide);
+                if (gmGet(AR.FLOW, null)?.id === id) gmDel(AR.FLOW);
                 try { if (!error && handle) handle.close(); } catch (_) {}
                 if (error) reject(error); else resolve(value);
             }
+            function onHide() { try { handle?.close(); } catch (_) {} finish(new Error("论坛页面已关闭，停止本次 Agent 获取")); }
             try { handle = GM_openInTab(AR.HOST + "/?ar_auto=1", { active: true, insert: true, setParent: true }); }
             catch (_) { finish(new Error("无法打开 Agent 登录标签")); return; }
             if (!handle) { finish(new Error("无法打开 Agent 登录标签")); return; }
             say(withLogout ? "正在 Agent 页面退出并重新登录…" : "正在 Agent 页面确认登录状态…");
             const started = Date.now();
-            timer = setInterval(function () {
+            function check() {
+                if (finished) return;
                 if (currentLdUser() !== user || location.hostname === "linux.do" && normUser(me.username) !== user) { finish(new Error("论坛账号已变化，停止 Agent 授权")); return; }
                 const flow = arFlowCurrent(id);
                 if (flow && flow.step === "done") {
@@ -1028,7 +1055,11 @@
                 } else if (!flow) finish(new Error("Agent 登录流程已取消或被替换"));
                 else if (handle.closed) finish(new Error("Agent 授权标签已关闭，登录尚未确认"));
                 else if (Date.now() - started > AR.TAB_TIMEOUT) finish(new Error("Agent 登录确认超时，请完成网页验证后重试"));
-            }, 400);
+            }
+            window.addEventListener("pagehide", onHide, { once:true });
+            unwatch = watchSharedFlow(AR.FLOW, check);
+            deadline = setTimeout(function () { finish(new Error("Agent 登录确认超时，请完成网页验证后重试")); }, AR.TAB_TIMEOUT);
+            timer = setInterval(check, 400); check();
         });
     }
     const AR_QPD_FALLBACK = 500000;
@@ -2444,21 +2475,24 @@
         const user = normUser(me.username), id = uuid4(), startedAt = Date.now();
         gmSet(CREDIT.FLOW, { id: id, username: user, startedAt: startedAt, status: "opening" });
         return new Promise(function (resolve, reject) {
-            let handle, settled = false, timer, deadline;
+            let handle, settled = false, timer, deadline, unwatch = function () {};
             function done(error, info) {
                 if (settled) return; settled = true; clearInterval(timer); clearTimeout(deadline);
-                if (creditFlow()?.id === id) gmDel(CREDIT.FLOW);
+                unwatch(); window.removeEventListener("pagehide", onHide);
+                if (gmGet(CREDIT.FLOW, null)?.id === id) gmDel(CREDIT.FLOW);
                 const finish = function () { releaseTabLock(); if (error) reject(error); else resolve(info); };
                 if (error) {
                     if (["level_required", "group_denied"].includes(error.creditStatus)) { try { handle?.close(); } catch (_) {} }
                     finish();
                 } else setTimeout(function () { try { handle.close(); } catch (_) {} finish(); }, 1000);
             }
+            function onHide() { try { handle?.close(); } catch (_) {} done(new Error("论坛页面已关闭，停止本次 Credit 获取")); }
             try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1&ldh_credit_flow=" + encodeURIComponent(id), { active: true, insert: true, setParent: true }); }
             catch (_) { done(new Error("无法打开 Credit 标签")); return; }
             if (!handle) { done(new Error("无法打开 Credit 标签")); return; }
             deadline = setTimeout(function () { done(new Error("Credit 等待超时，请完成网页验证后点击 LDC 重试")); }, CREDIT.TAB_TIMEOUT);
-            timer = setInterval(function () {
+            function check() {
+                if (settled) return;
                 if (normUser(me.username) !== user) { done(new Error("论坛账号已变化")); return; }
                 const flow = creditFlow();
                 if (!flow || flow.id !== id) { done(new Error("Credit 流程已被替换")); return; }
@@ -2467,8 +2501,16 @@
                 } else if (["level_required", "group_denied", "account_mismatch"].includes(flow.status)) {
                     const error = new Error(flow.error); error.creditStatus = flow.status; error.currentLevel = flow.currentLevel;
                     done(error);
-                } else if (handle.closed) done(new Error("Credit 授权标签已关闭"));
-            }, 400);
+                } else if (flow.status === "failed") done(new Error(flow.error || "Credit 本次获取失败，点击重试"));
+                else if (handle.closed) done(new Error("Credit 授权标签已关闭"));
+                else if (ldc.state === "loading") {
+                    const message = flow.status === "verifying" ? flow.error : "在 Credit 标签获取当前余额…";
+                    if (message !== ldc.msg) { ldc.msg = message; render(); }
+                }
+            }
+            window.addEventListener("pagehide", onHide, { once:true });
+            unwatch = watchSharedFlow(CREDIT.FLOW, check);
+            timer = setInterval(check, 400); check();
         });
     }
 
@@ -3361,7 +3403,7 @@
         if (ldc.state === "ok") {
             return base + 'color:#8fe0b0;" title="' + esc(ldc.msg || "可用 LINUX DO Credits，点击刷新") + '">' + SP3 + "LDC：" + esc(ldc.value) + "</span>";
         }
-        if (ldc.state === "loading") return base + 'color:#e0c060;" title="' + esc(ldc.msg || "读取中") + '">' + SP3 + "LDC：获取中</span>";
+        if (ldc.state === "loading") return base + 'color:#e0c060;" title="' + esc(ldc.msg || "读取中") + '">' + SP3 + (/等待.*验证/.test(ldc.msg) ? "LDC：待验证" : "LDC：获取中") + "</span>";
         if (ldc.state === "mismatch") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg) + '">' + SP3 + "LDC：账号不符</span>";
         if (ldc.state === "fail") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg || "读取失败，点击重试") + '">' + SP3 + "LDC：失败</span>";
         const pending = !forumSurfaceReady() || !forumStableAt || Date.now() - forumStableAt < 8000 || !forumAuthAt;
