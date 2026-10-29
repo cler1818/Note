@@ -375,12 +375,18 @@
 
     const TABLOCK_KEY = "ldh_fg_tab_lock";
     const TABLOCK_TTL = 300 * 1000;
+    let ownedTabLock = "";
     function acquireTabLock() {
-        const now = Date.now(), cur = Number(gmGet(TABLOCK_KEY, 0)) || 0;
-        if (now - cur < TABLOCK_TTL) return false;
-        gmSet(TABLOCK_KEY, now); return true;
+        const now = Date.now(), saved = gmGet(TABLOCK_KEY, 0), at = Number(saved?.at || saved) || 0;
+        const ttl = Math.max(TABLOCK_TTL, AR.TAB_TIMEOUT, CREDIT.TAB_TIMEOUT) + 5000;
+        if (at && now - at < ttl) return false;
+        ownedTabLock = now.toString(36) + Math.random().toString(36).slice(2);
+        gmSet(TABLOCK_KEY, { id: ownedTabLock, at: now }); return true;
     }
-    function releaseTabLock() { gmDel(TABLOCK_KEY); }
+    function releaseTabLock() {
+        if (ownedTabLock && gmGet(TABLOCK_KEY, null)?.id === ownedTabLock) gmDel(TABLOCK_KEY);
+        ownedTabLock = "";
+    }
 
     const OAUTH_ALLOW = [AR.CLIENT_ID, ANY.CLIENT_ID, CREDIT.CLIENT_ID];
     function clientAllowed(id) { return !!id && OAUTH_ALLOW.indexOf(id) >= 0; }
@@ -497,15 +503,28 @@
             }
             const ex = opts.headers || {};
             Object.keys(ex).forEach(function (k) { h[k] = ex[k]; });
-            GM_xmlhttpRequest({
-                method: opts.method || "GET", url: url, headers: h,
-                data: opts.data,
-                withCredentials: true, timeout: Number(opts.timeout) || 20000,
-                onload: function (r) { resolve(r); },
-                onerror: function () { reject(new Error("网络错误")); },
-                ontimeout: function () { reject(new Error("请求超时")); },
-                onabort: function () { reject(new Error("请求已取消")); }
-            });
+            const timeout = Number(opts.timeout) || 20000;
+            let settled = false, request;
+            function finish(error, response) {
+                if (settled) return;
+                settled = true; clearTimeout(watchdog);
+                if (error) reject(error); else resolve(response);
+            }
+            const watchdog = setTimeout(function () {
+                finish(new Error("请求超时"));
+                try { request?.abort(); } catch (_) {}
+            }, timeout + 1000);
+            try {
+                request = GM_xmlhttpRequest({
+                    method: opts.method || "GET", url: url, headers: h,
+                    data: opts.data,
+                    withCredentials: true, timeout: timeout,
+                    onload: function (r) { finish(null, r); },
+                    onerror: function () { finish(new Error("网络错误")); },
+                    ontimeout: function () { finish(new Error("请求超时")); },
+                    onabort: function () { finish(new Error("请求已取消")); }
+                });
+            } catch (error) { finish(error); }
         });
     }
     async function gmJson(url, opts) {
@@ -631,6 +650,11 @@
                 typeof value === "string" && (name === "agent" ? /^\$\d{1,18}(?:\.\d{1,8})?$/ : /^\d{1,18}(?:\.\d{1,8})?$/).test(value);
             if (valid && successTime(at, now) && at >= (row.value_times[name] || 0)) { row[name] = value; row.value_times[name] = at; }
         }
+        if (patch.no_oauth === false && patch.agent_manual_recovered === true &&
+                successTime(patch.oauth_at, now) && patch.oauth_at === patch.value_times?.agent &&
+                typeof patch.agent === "string" && /^\$\d{1,18}(?:\.\d{1,8})?$/.test(patch.agent)) {
+            row.agent_manual_recovery_at = Math.max(row.agent_manual_recovery_at || 0, patch.oauth_at);
+        }
         for (const [name, times, allowed, stamp] of [["metrics", "metric_times", SUCCESS_METRICS, patch.grade_at],
             ["compliance", "compliance_times", SUCCESS_COMPLIANCE, patch.grade_at], ["summary", "summary_times", Object.values(SUCCESS_SUMMARY), patch.summary_at]]) {
             row[name] = row[name] || {}; row[times] = row[times] || {};
@@ -656,6 +680,10 @@
             for (const [field, at] of Object.entries(saved[times] || {})) {
                 if (sameServiceDay(at, now) && saved[name]?.[field] != null) { row[name][field] = saved[name][field]; row[times][field] = at; }
             }
+        }
+        if (row.agent && successTime(saved.agent_manual_recovery_at, now) &&
+                saved.agent_manual_recovery_at <= row.value_times.agent && !getNoOauth(user)) {
+            row.no_oauth = false; row.oauth_at = row.value_times.agent; row.agent_manual_recovered = true;
         }
         return row;
     }
@@ -2002,9 +2030,12 @@
                     console.warn("[LDH] 授权页显示无权限，但读不到账号名，未落标志");
                     return true;
                 }
-                saveNoOauth(who, "connect-page");
+                if (cid === AR.CLIENT_ID) saveNoOauth(who, "connect-page");
                 const credit = creditFlow();
-                if (cid === CREDIT.CLIENT_ID && credit?.username === who) updateCreditFlow(credit, { status: "group_denied", error: NO_OAUTH_TEXT, at: Date.now() });
+                if (cid === CREDIT.CLIENT_ID) {
+                    const at = Date.now(); saveCreditAccess(who, "group_denied", NO_OAUTH_TEXT, at);
+                    if (credit?.username === who) updateCreditFlow(credit, { status: "group_denied", error: NO_OAUTH_TEXT, at: at });
+                }
                 const arFlow = gmGet(AR.FLOW, null);
                 if (cid === AR.CLIENT_ID && arFlow && arFlow.step === "authorizing" && Date.now() - arFlow.ts < 180000) {
                     gmSet(AR.FLOW, Object.assign({}, arFlow, { step: "done", ts: Date.now(), noOauth: true, error: NO_OAUTH_MSG }));
@@ -2194,8 +2225,11 @@
     let readLedger = {};
     const processedTopics = new Set();
     let forumStableAt = 0, forumAuthAt = 0, sideAllowed = false;
-    function managedByPython() { return sessionStorage.getItem("ldh_python_managed") === "1"; }
-    function forumOnly() { return sessionStorage.getItem("ldh_forum_only") === "1"; }
+    function managedByPython() {
+        return sessionStorage.getItem("ldh_python_managed") === "1" &&
+            sessionStorage.getItem("ldh_python_managed_document") === String(performance.timeOrigin);
+    }
+    function forumOnly() { return managedByPython() && sessionStorage.getItem("ldh_forum_only") === "1"; }
     function forumSurfaceReady() {
         const app = !!document.querySelector("#main-outlet,.topic-list,.topic-body");
         const blocking = /Just a moment|Checking your browser|正在验证|请稍候/i.test(document.title) ||
@@ -2205,6 +2239,11 @@
     function forumSideReady() {
         return !forumOnly() && location.hostname === "linux.do" && forumSurfaceReady() && forumStableAt > 0 &&
             Date.now() - forumStableAt >= 8000 && forumAuthAt > 0 && (!managedByPython() || sideAllowed);
+    }
+    function manualForumSideReady() {
+        if (!forumOnly() && location.hostname === "linux.do" && forumSurfaceReady() && forumAuthAt > 0 &&
+            forumStableAt > 0 && Date.now() - forumStableAt >= 8000) sideAllowed = true;
+        return forumSideReady();
     }
     function publishHealth() {
         const ready = forumSurfaceReady();
@@ -2232,7 +2271,8 @@
                 getInviteLink(expected).then(function (item) {
                     document.documentElement.setAttribute("data-ldh-invite-result", JSON.stringify(Object.assign({ id, status: "ok" }, item)));
                 }).catch(function (error) {
-                    document.documentElement.setAttribute("data-ldh-invite-result", JSON.stringify({ id, status: "failed", error: error.message }));
+                    document.documentElement.setAttribute("data-ldh-invite-result", JSON.stringify({ id, status: "failed", error: error.message,
+                        trust_level: error.inviteTrustLevel, fresh_tab_retried: error.inviteFreshTabRetried === true, retryable: error.inviteRetryable }));
                 }).finally(function () { inviteBusy = false; });
             }
             else if(cmd.action==="daily_data") {
@@ -2339,7 +2379,7 @@
         let cs = paramsFrom(a.finalUrl) || paramsFromText(a.responseText);
         if (!cs) {
 
-            if (detectNoOauth(a.responseText)) throw noOauthError();
+            if (detectNoOauth(a.responseText)) throw Object.assign(new Error(NO_OAUTH_TEXT), { creditStatus: "group_denied" });
             const ap = parseApprove(a.responseText);
             if (!ap) throw new Error("授权页无允许链接(Linux DO登录态可能失效)");
             const approved = await gmFetch(new URL(ap, CONNECT_HOST).href, {
@@ -2392,7 +2432,10 @@
 
     let creditJob = null;
     function refreshCredit(manual) {
-        if(!forumSideReady())return Promise.resolve();
+        if (!(manual ? manualForumSideReady() : forumSideReady())) {
+            if (manual) ldhToast(forumOnly() ? "本次仅处理论坛，LDC 已跳过" : "论坛页面尚未就绪，完成验证后点击 LDC 重试", "info");
+            return Promise.resolve();
+        }
         if (!creditJob) creditJob = refreshCreditOnce(manual).finally(function () { creditJob = null; });
         return creditJob;
     }
@@ -2422,7 +2465,6 @@
             if (normUser(me.username) !== user) return;
             const status = error.creditStatus || "failed";
             ldc = { state: status === "level_required" ? status : status === "account_mismatch" ? "mismatch" : "fail", value: "", msg: error.message || "Credit 本次取数失败" };
-            if (status === "group_denied") saveNoOauth(user, "credit-group");
             if (status !== "account_mismatch") saveCreditAccess(user, status, ldc.msg, Date.now(), error.currentLevel);
         }
         render();
@@ -2454,16 +2496,19 @@
         if (m > 0) return m + "分钟";
         return s + "秒";
     }
+    let summaryJob = null;
     function loadSummary(force) {
         const user = me.username;
         if (!user) return Promise.resolve();
+        if (summaryJob?.user === user) return summaryJob.promise;
         const key = "ldh_summary_" + normUser(user), cached = readJson(key, null);
         if (!force && cached && cached.data && Date.now() - cached.at >= 0 && Date.now() - cached.at < SYNC_THROTTLE_MS && sameServiceDay(cached.at, Date.now())) {
             summary = cached.data; summaryState = "ok"; render(); return Promise.resolve();
         }
-        if (summaryState === "loading") return Promise.resolve();
         summaryState = "loading"; render();
-        return fetchSummary(user).then(function (s) {
+        const job = { user: user, promise: null };
+        summaryJob = job;
+        job.promise = fetchSummary(user).then(function (s) {
             if (me.username !== user) return;
             const at = Date.now(); writeJson(key, { at: at, data: s });
             summary = s; summaryState = "ok"; render();
@@ -2471,37 +2516,38 @@
         }).catch(function () {
             if (me.username !== user) return;
             summary = null; summaryState = "fail"; render();
-        });
+        }).finally(function () { if (summaryJob === job) summaryJob = null; });
+        return job.promise;
     }
 
     function syncViaXhr(onFail) {
         if (typeof GM_xmlhttpRequest !== "function") { onFail("nogrant"); return; }
+        const user = normUser(me.username);
         syncState = "syncing"; render();
-        GM_xmlhttpRequest({
-            method: "GET", url: "https://connect.linux.do/", timeout: 15000,
-            headers: { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Referer": "https://connect.linux.do/", "User-Agent": navigator.userAgent },
-            onload: function (resp) {
+        return gmFetch("https://connect.linux.do/", {
+            timeout: 15000,
+            headers: { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Referer": "https://connect.linux.do/", "User-Agent": navigator.userAgent }
+        }).then(function (resp) {
+                if (normUser(me.username) !== user) return;
                 const html = resp.responseText || "";
                 if (CF_CHALLENGE_RE.test(html) && !/tl3-ring|empty-state/.test(html)) { onFail("cf"); return; }
                 let doc; try { doc = new DOMParser().parseFromString(html, "text/html"); } catch (_) { onFail("err"); return; }
                 const data = parseConnectRoot(doc);
                 if (resp.status < 200 || resp.status >= 300) { onFail("err"); return; }
-                if (data && data.account && normUser(data.account) !== normUser(me.username)) { onFail("otheruser"); return; }
-                if (data && storeTL3(data, me.username)) { _tl3Cache = { key: "", at: 0, v: null }; syncAt = Date.now(); syncState = readTL3() ? "ok" : "otheruser"; render(); }
+                if (data && data.account && normUser(data.account) !== user) { onFail("otheruser"); return; }
+                if (data && normUser(data.account) === user && storeTL3(data, user)) { _tl3Cache = { key: "", at: 0, v: null }; syncAt = Date.now(); syncState = readTL3() ? "ok" : "otheruser"; render(); }
                 else { onFail("empty"); }
-            },
-            onerror: function () { onFail("err"); },
-            ontimeout: function () { onFail("err"); }
-        });
+        }).catch(function () { if (normUser(me.username) === user) onFail("err"); });
     }
     function openConnectTab() {
         if(!forumSideReady())return;
+        const user = normUser(me.username);
 
         syncState = "opening"; render();
 
         const rawTL3 = function () {
-            if (!me.username) return null;
-            try { const s = GM_getValue("ld_tl3_" + me.username.toLowerCase(), ""); return s ? JSON.parse(s) : null; } catch (_) { return null; }
+            if (!user) return null;
+            try { const s = GM_getValue("ld_tl3_" + user, ""); return s ? JSON.parse(s) : null; } catch (_) { return null; }
         };
         const before = (function () { const r = rawTL3(); return (r && r.at) || 0; })();
         const url = "https://connect.linux.do/#ldhsync=" + encodeURIComponent(me.username || "");
@@ -2510,9 +2556,10 @@
         if (!handle) { syncState = "popupblock"; render(); return; }
         let n = 0;
         const iv = setInterval(function () {
+            if (normUser(me.username) !== user) { clearInterval(iv); try { handle.close(); } catch (_) {} return; }
             n++;
             const r = rawTL3();
-            if (r && (r.at || 0) !== before) {
+            if (r && normUser(r.account) === user && (r.at || 0) !== before) {
                 clearInterval(iv); _tl3Cache = { key: "", at: 0, v: null };
                 syncAt = Date.now(); syncState = "ok"; render();
                 try { if (handle.close) handle.close(); } catch (_) {}
@@ -3062,7 +3109,18 @@
     function arSuccessText() {
         return gmGet(AR.REWARDKEY, "") === todayStr() ? "签到成功" : "今日登录签到已处理，接口未确认新增签到奖励";
     }
+    let agentJob = null;
     function runArCheckin(force, manual) {
+        const user = normUser(me.username);
+        if (agentJob) return agentJob.user === user ? agentJob.promise : agentJob.promise.then(function () { return runArCheckin(force, manual); });
+        const job = { user: user, promise: null };
+        agentJob = job;
+        let pending;
+        try { pending = runArCheckinOnce(force, manual); } catch (error) { pending = Promise.reject(error); }
+        job.promise = Promise.resolve(pending).finally(function () { if (agentJob === job) agentJob = null; });
+        return job.promise;
+    }
+    function runArCheckinOnce(force, manual) {
         manual = manual === undefined ? !!force : manual === true;
         const expectedUser = normUser(me.username);
         if(!forumSideReady())return Promise.resolve();
@@ -3234,7 +3292,9 @@
         if (ldc.state === "loading") return base + 'color:#e0c060;" title="' + esc(ldc.msg || "读取中") + '">' + SP3 + "LDC：获取中</span>";
         if (ldc.state === "mismatch") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg) + '">' + SP3 + "LDC：账号不符</span>";
         if (ldc.state === "fail") return base + 'color:#ff8a8a;" title="' + esc(ldc.msg || "读取失败，点击重试") + '">' + SP3 + "LDC：失败</span>";
-        return base + 'color:#888;" title="点击读取 Credit 积分">' + SP3 + "LDC：获取中</span>";
+        const pending = !forumSurfaceReady() || !forumStableAt || Date.now() - forumStableAt < 8000 || !forumAuthAt;
+        return base + 'color:#888;" title="' + esc(ldc.msg || (pending ? "论坛就绪后读取 Credit 积分" : "点击读取 Credit 积分")) + '">' + SP3 +
+            (pending ? "LDC：待论坛就绪" : managedByPython() && !sideAllowed ? "LDC：待调用" : "LDC：点击获取") + "</span>";
     }
 
     function arSpan() {
@@ -3473,7 +3533,9 @@
         TIMEOUT_MS: 20000,
         URL_RE: /^https:\/\/linux\.do\/invites\/[A-Za-z0-9_-]+(?:[/?#].*)?$/i,
         NOT_LOGIN: "尚未登录 Linux.do，请登录后再试。",
-        NO_PERM: "无邀请权限，当前账号不能获取邀请链接。"
+        NO_PERM: "无邀请权限，当前账号不能获取邀请链接。",
+        RETRY_FLOW: "ldh_invite_retry_flow_",
+        RETRY_TIMEOUT: 70000
     };
 
     const LDH_TOAST_ID = "ldh_toast";
@@ -3544,7 +3606,7 @@
         const u = (rd.data && (rd.data.current_user || rd.data.currentUser)) || null;
         const name = String((u && (u.username_lower || u.username)) || "").trim().toLowerCase();
         if (!name) throw new Error(INVITE.NOT_LOGIN);
-        return { username: name, staff: !!(u && u.staff) };
+        return { username: name, staff: !!(u && u.staff), trustLevel: Number.isInteger(u.trust_level) ? u.trust_level : null };
     }
 
     function invitePickPending(list) {
@@ -3567,7 +3629,6 @@
             headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
         });
 
-        if (r.status === 403 || r.status === 404) throw new Error(INVITE.NO_PERM);
         const rd = await inviteRead(r);
         if (!r.ok) throw new Error(inviteErrMsg(rd.data, rd.text, r.status));
         return Array.isArray(rd.data && rd.data.invites) ? rd.data.invites : [];
@@ -3647,12 +3708,77 @@
         if (!ok) throw new Error("浏览器拒绝写入剪贴板");
     }
 
-    async function getInviteLink(expectedUser) {
+    function invitePermissionDenied(error) {
+        const text = String(error?.message || error || "");
+        return !/请(?:再)?等待\s*\d+(?:\.\d+)?\s*(?:小时|分钟|秒|天)\s*后再试/.test(text) &&
+            /无邀请权限|没有邀请权限|没有权限|权限不足|等级不够|等级不足|not permitted|forbidden/i.test(text);
+    }
+    function inviteRetryError(error, trustLevel, freshTab) {
+        error.inviteTrustLevel = trustLevel;
+        if (freshTab) error.inviteFreshTabRetried = true;
+        if (trustLevel === 3 && invitePermissionDenied(error)) {
+            error.inviteRetryable = true;
+            if (!error.message.startsWith("TL3 ")) error.message = "TL3 邀请接口异常，请完成论坛验证后重试：" + error.message;
+        }
+        return error;
+    }
+    async function inviteInFreshTab(username) {
+        const id = uuid4(), key = INVITE.RETRY_FLOW + id;
+        const flow = { id, username, startedAt: Date.now(), status: "running" };
+        gmSet(key, flow);
+        let handle = null;
+        try {
+            handle = GM_openInTab("https://linux.do/?ldh_invite_retry=" + encodeURIComponent(id), { active: true, insert: true, setParent: true });
+            if (!handle) throw new Error("无法打开邀请复核标签页");
+            while (Date.now() - flow.startedAt < INVITE.RETRY_TIMEOUT) {
+                if (normUser(me.username) !== username) throw new Error("论坛账号已变化，停止获取邀请链接");
+                const reply = gmGet(key, null);
+                if (reply?.status === "ok") return Object.assign({}, reply.result, { fresh_tab_retried: true });
+                if (reply?.status === "failed") throw inviteRetryError(new Error(reply.error || "邀请复核失败"), reply.trust_level ?? 3, true);
+                if (handle.closed) throw new Error("邀请复核标签页已关闭，请重试");
+                await arWait(500);
+            }
+            throw new Error("TL3 邀请复核超时，请完成论坛验证后重试");
+        } finally {
+            gmDel(key);
+            try { handle?.close(); } catch (_) {}
+        }
+    }
+    function initInviteRetryTab() {
+        const id = new URLSearchParams(location.search).get("ldh_invite_retry");
+        if (!id) return;
+        const key = INVITE.RETRY_FLOW + id, flow = gmGet(key, null);
+        if (!flow || flow.id !== id || Date.now() - flow.startedAt >= INVITE.RETRY_TIMEOUT) return;
+        sessionStorage.setItem("ldh_python_managed", "1");
+        sessionStorage.setItem("ldh_python_managed_document", String(performance.timeOrigin));
+        sessionStorage.setItem("ldh_forum_only", "1");
+        (async function () {
+            while (Date.now() - flow.startedAt < INVITE.RETRY_TIMEOUT) {
+                if (!gmGet(key, null)) return;
+                if (accountState === "authenticated" && forumSurfaceReady()) break;
+                await arWait(500);
+            }
+            if (!gmGet(key, null)) return;
+            try {
+                if (accountState !== "authenticated" || !forumSurfaceReady()) throw new Error("TL3 邀请复核页面未就绪，请完成验证后重试");
+                const result = await getInviteLink(flow.username, true);
+                if (gmGet(key, null)) gmSet(key, Object.assign({}, flow, { status: "ok", result }));
+            } catch (error) {
+                if (gmGet(key, null)) gmSet(key, Object.assign({}, flow, { status: "failed", error: error.message, trust_level: error.inviteTrustLevel }));
+            }
+        })();
+    }
+    async function getInviteLink(expectedUser, freshTab) {
         const user = await inviteCurrentUser();
         if (expectedUser && user.username !== normUser(expectedUser)) throw new Error("论坛账号已变化，停止获取邀请链接");
-        let link = invitePickPending(await invitePending(user.username)), created = false;
-        if (!link) { link = await inviteCreate(user); created = true; }
-        return { username: user.username, link, created, acquired_at: Date.now() };
+        try {
+            let link = invitePickPending(await invitePending(user.username)), created = false;
+            if (!link) { link = await inviteCreate(user); created = true; }
+            return { username: user.username, link, created, acquired_at: Date.now(), trust_level: user.trustLevel };
+        } catch (error) {
+            if (!freshTab && user.trustLevel === 3 && invitePermissionDenied(error)) return await inviteInFreshTab(user.username);
+            throw inviteRetryError(error, user.trustLevel, freshTab);
+        }
     }
     async function runInvite(btn) {
         if (inviteBusy) return;
@@ -3739,7 +3865,7 @@
             const readyDeadline = Date.now() + 180000;
             do {
                 if (!auxiliaryChallenge()) await refreshForumUser(true, true);
-                if (accountState === "authenticated" && forumIdentityAt >= since && forumSideReady()) break;
+                if (accountState === "authenticated" && forumIdentityAt >= since && manualForumSideReady()) break;
                 if (accountState === "anonymous") throw new Error("论坛未登录，请先登录");
                 await arWait(5000);
             } while (Date.now() < readyDeadline);
@@ -3760,15 +3886,19 @@
             });
             const cached = currentForumSuccess(username);
             patch.value_times = Object.assign({}, cached.value_times, refreshed.value_times);
+            if (cached.agent_manual_recovered === true && cached.oauth_at === patch.value_times.agent && !getNoOauth(username)) {
+                patch.no_oauth = false; patch.oauth_at = cached.oauth_at; patch.agent_manual_recovered = true;
+            }
             for (const name of ["metrics", "compliance", "summary"]) if (Object.keys(cached[name]).length) patch[name] = cached[name];
+            if (Object.keys(cached.summary).length) patch.summary_at = Math.max(...Object.values(cached.summary_times));
             if (Object.keys(cached.metrics).length || Object.keys(cached.compliance).length) {
                 patch.grade_at = Math.max(0, ...Object.values(cached.metric_times), ...Object.values(cached.compliance_times));
                 patch.grade_status = "captured";
             } else if (Object.keys(cached.summary).length) {
-                patch.summary_at = Math.max(...Object.values(cached.summary_times));
                 patch.grade_at = patch.summary_at; patch.grade_status = "summary_only";
             }
-            const result = await websiteRequest({ account_info: patch });
+            const { version, day, ...accountInfo } = patch;
+            const result = await websiteRequest({ account_info: accountInfo });
             if (result.skipped?.includes("account_info")) throw new Error("网站账号身份已变更，请重新采集后点击用户名上传");
             if (ldc.state !== "ok") errors.push(ldc.msg || "LDC 本次未取到");
             if (!getNoOauth(username) && arState !== "ok") errors.push(arText || "Agent 本次未取到");
@@ -4457,6 +4587,6 @@
         }, 1000);
         reconcile();
     }
-    function boot() { initPythonBridge(); initGithubTokenMenu(); initLoginPage(); }
+    function boot() { initInviteRetryTab(); initPythonBridge(); initGithubTokenMenu(); initLoginPage(); }
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot); else boot();
 })();
