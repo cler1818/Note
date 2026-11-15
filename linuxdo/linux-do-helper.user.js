@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LINUX DO 助手
 // @namespace    http://tampermonkey.net/
-// @version      1.4.1
+// @version      1.4.3
 // @description  论坛三模式 + 等级/积分 + 签到/邀请 + 私库账号/剪贴板登录 + hCaptcha 勾选与验证完成后自动提交
 // @author       cler1818
 // @homepageURL  https://github.com/cler1818/Note
@@ -399,6 +399,86 @@
         ownedTabLock = "";
     }
 
+    // One browser profile shares this origin's Web Lock across all forum tabs.
+    const SHARED_AUXILIARY_LOCK = "ldh-auxiliary-acquisition-v1";
+    const SHARED_AUXILIARY_PREFIX = "ldh_auxiliary_result_v1:";
+    let sharedCreditEvidence = null, sharedAgentEvidence = null;
+    function captureSharedAuxiliary(name) {
+        const user = normUser(me.username);
+        if (name === "ldc") return { ldc:Object.assign({}, ldc), access:creditAccess(user), proof:sharedCreditEvidence };
+        return { state:arState, text:arText, balance:arBal, at:agentObservedAt, proof:sharedAgentEvidence };
+    }
+    function applySharedAuxiliary(name, data) {
+        const user = normUser(me.username);
+        if (name === "ldc") {
+            ldc = Object.assign({}, data.ldc);
+            sharedCreditEvidence = data.proof || null;
+            if (data.access?.username === user) gmSet(creditAccessKey(user), data.access);
+            if (ldc.state === "ok" && data.proof?.username === user) {
+                writeCreditCache(user, ldc.value, data.proof.at);
+                rememberForumSuccess(user, { ldc:ldc.value, value_times:{ldc:data.proof.at}, ldc_status:"ok", ldc_status_at:data.proof.at, ldc_error:"" });
+            }
+        } else {
+            arState = data.state; arText = data.text; arBal = data.balance; agentObservedAt = data.at;
+            sharedAgentEvidence = data.proof || null;
+            if (arState === "ok" && arBal && agentObservedAt > 0) {
+                rememberForumSuccess(user, { agent:arBal, value_times:{agent:agentObservedAt} });
+                gmSet(AR.BALKEY, arBal); gmSet(AR.BALDAY, todayStr(agentObservedAt));
+                saveArNote(arState, arText, arBal);
+            }
+        }
+        render();
+    }
+    function sharedAuxiliaryProof(name, data, user) {
+        const proof = data?.proof;
+        if (name === "ldc") return data?.ldc?.state !== "ok" || proof?.username === user && proof.id > 0 && proof.balance === data.ldc.value;
+        return data?.state !== "ok" || proof?.expectedUser === user && proof.withLogout === true && proof.userId > 0 && proof.balance === data.balance;
+    }
+    async function runSharedAuxiliary(name, operation, options) {
+        const opts = options || {}, user = normUser(me.username), requestedAt = Date.now();
+        const key = SHARED_AUXILIARY_PREFIX + user + ":" + name;
+        if (!user) return;
+        if (!navigator.locks?.request) throw new Error("浏览器不支持跨标签取数队列，请升级浏览器后重试");
+        const controller = new AbortController();
+        let active = false;
+        const valid = function () { return normUser(me.username) === user && (!opts.valid || opts.valid()); };
+        const onHide = function () { controller.abort(); };
+        window.addEventListener("pagehide", onHide, { once:true });
+        const timer = setTimeout(function () { if (!active) controller.abort(); }, 2 * Math.max(AR.TAB_TIMEOUT, CREDIT.TAB_TIMEOUT) + 15000);
+        try {
+            return await navigator.locks.request(SHARED_AUXILIARY_LOCK, { signal:controller.signal }, async function () {
+                active = true;
+                if (!valid()) return { cancelled:true };
+                let previous = null;
+                try { previous = JSON.parse(localStorage.getItem(key) || "null"); } catch (_) {}
+                const recent = previous && previous.user === user && previous.name === name && previous.day === todayStr() &&
+                    previous.at <= Date.now() && (previous.at >= requestedAt || !opts.manual && Date.now() - previous.at <= 30000);
+                const freshProof = previous?.error || sharedAuxiliaryProof(name, previous?.data, user) &&
+                    (name === "ldc" ? previous?.data?.proof?.at : previous?.data?.at) >= requestedAt;
+                if (recent && (!opts.requireProof || freshProof)) {
+                    if (previous.error) throw new Error(previous.error);
+                    (opts.apply || function (data) { applySharedAuxiliary(name, data); })(previous.data);
+                    return previous.result;
+                }
+                try {
+                    const result = await operation();
+                    if (!valid() || result?.deferred || result?.cancelled) return result;
+                    const data = (opts.capture || function () { return captureSharedAuxiliary(name); })();
+                    const state = name === "ldc" ? data.ldc?.state : data.state;
+                    if (["ok", "fail", "failed", "mismatch", "level_required", "group_denied", "nooauth", "pending"].includes(state)) {
+                        localStorage.setItem(key, JSON.stringify({ user:user, name:name, day:todayStr(), at:Date.now(), data:data, result:result }));
+                    }
+                    return result;
+                } catch (error) {
+                    if (valid() && !error?.sideDeferred) localStorage.setItem(key, JSON.stringify({user:user,name:name,day:todayStr(),at:Date.now(),error:String(error?.message || error)}));
+                    throw error;
+                }
+            });
+        } finally {
+            clearTimeout(timer); window.removeEventListener("pagehide", onHide);
+        }
+    }
+
     const OAUTH_ALLOW = [AR.CLIENT_ID, ANY.CLIENT_ID, CREDIT.CLIENT_ID];
     function clientAllowed(id) { return !!id && OAUTH_ALLOW.indexOf(id) >= 0; }
 
@@ -766,19 +846,35 @@
             /Just a moment|Verifying you are human|正在验证|请稍[候后]/i.test(document.title || "");
     }
     function creditPageFlow() {
-        const queryId = new URLSearchParams(location.search).get("ldh_credit_flow");
+        // HTTP redirects may discard the query before this script runs.
+        const queryId = new URLSearchParams(location.search).get("ldh_credit_flow") ||
+            new URLSearchParams(location.hash.slice(1)).get("ldh_credit_flow");
         if (queryId) sessionStorage.setItem("ldh_credit_flow", queryId);
         const id = sessionStorage.getItem("ldh_credit_flow");
         const flow = creditFlow();
         if (!flow || flow.id !== id) return;
         let busy = false, stopped = false, failures = 0;
+        function finish(values) {
+            if (stopped) return;
+            updateCreditFlow(flow, values);
+            stopped = true; clearInterval(timer);
+            sessionStorage.removeItem("ldh_credit_flow");
+            // The owned page can close even while the forum tab is suspended.
+            setTimeout(function () { try { window.close(); } catch (_) {} }, 250);
+        }
         function failed(message) {
             if (++failures < 3) return;
-            updateCreditFlow(flow, { status:"failed", error:message, updatedAt:Date.now() });
-            stopped = true; clearInterval(timer);
+            finish({ status:"failed", error:message, updatedAt:Date.now() });
         }
         async function step() {
-            if (stopped || !creditFlow() || creditFlow().id !== id) { clearInterval(timer); return; }
+            if (stopped) return;
+            if (Date.now() - flow.startedAt >= CREDIT.TAB_TIMEOUT) {
+                finish({ status:"failed", error:"Credit 获取超时，点击 LDC 重试", updatedAt:Date.now() }); return;
+            }
+            if (!creditFlow() || creditFlow().id !== id) {
+                stopped = true; clearInterval(timer);sessionStorage.removeItem("ldh_credit_flow");
+                try { window.close(); } catch (_) {} return;
+            }
             if (auxiliaryChallenge()) { updateCreditFlow(flow, { status:"verifying", error:"Credit 等待网页验证，完成后继续获取", updatedAt:Date.now() }); return; }
             if (busy || document.readyState === "loading") return;
             busy = true;
@@ -801,12 +897,11 @@
                     failed(String(body?.error_msg || "Credit 账号或余额未确认")); return;
                 }
                 if (normUser(user.username) !== flow.username) {
-                    updateCreditFlow(flow, { status: "account_mismatch", error: "Credit 账号与当前论坛账号不一致", at: Date.now() });
+                    finish({ status: "account_mismatch", error: "Credit 账号与当前论坛账号不一致", at: Date.now() });
                 } else {
-                    updateCreditFlow(flow, { status: "ok", username: normUser(user.username), userId: Number(user.id),
+                    finish({ status: "ok", username: normUser(user.username), userId: Number(user.id),
                         balance: balance.toFixed(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""), at: Date.now() });
                 }
-                stopped = true; clearInterval(timer);
             } catch (_) { failed("Credit 网络请求失败或超时，点击 LDC 重试"); } finally { busy = false; }
         }
         const timer = setInterval(step, 2000); step();
@@ -1034,7 +1129,9 @@
                 if (finished) return; finished = true;
                 clearInterval(timer); clearTimeout(deadline); unwatch(); window.removeEventListener("pagehide", onHide);
                 if (gmGet(AR.FLOW, null)?.id === id) gmDel(AR.FLOW);
-                try { if (!error && handle) handle.close(); } catch (_) {}
+                try { if (handle) handle.close(); } catch (_) {}
+                if (!error && value) sharedAgentEvidence = {expectedUser:user,withLogout:!!withLogout,flowId:id,userId:value.user.id,
+                    checkedIn:value.checkedIn === true,at:Date.now(),balance:"$" + (Number(value.user.quota) / (Number(value.user.quota_per_unit) || AR_QPD_FALLBACK)).toFixed(2)};
                 if (error) reject(error); else resolve(value);
             }
             function onHide() { try { handle?.close(); } catch (_) {} finish(new Error("论坛页面已关闭，停止本次 Agent 获取")); }
@@ -2482,24 +2579,22 @@
         const user = normUser(me.username), id = uuid4(), startedAt = Date.now();
         gmSet(CREDIT.FLOW, { id: id, username: user, startedAt: startedAt, status: "opening" });
         return new Promise(function (resolve, reject) {
-            let handle, settled = false, timer, deadline, unwatch = function () {};
+            let handle, settled = false, timer, deadline, closedAt = 0, unwatch = function () {};
             function done(error, info) {
                 if (settled) return; settled = true; clearInterval(timer); clearTimeout(deadline);
                 unwatch(); window.removeEventListener("pagehide", onHide);
                 if (gmGet(CREDIT.FLOW, null)?.id === id) gmDel(CREDIT.FLOW);
-                const finish = function () { releaseTabLock(); if (error) reject(error); else resolve(info); };
-                if (error) {
-                    if (["level_required", "group_denied"].includes(error.creditStatus)) { try { handle?.close(); } catch (_) {} }
-                    finish();
-                } else setTimeout(function () { try { handle.close(); } catch (_) {} finish(); }, 1000);
+                try { handle?.close(); } catch (_) {}
+                releaseTabLock(); if (error) reject(error); else resolve(info);
             }
             function onHide() { try { handle?.close(); } catch (_) {} done(new Error("论坛页面已关闭，停止本次 Credit 获取")); }
-            try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1&ldh_credit_flow=" + encodeURIComponent(id), { active: true, insert: true, setParent: true }); }
+            try { handle = GM_openInTab(CREDIT.HOST + "/home?ldh_credit_auto=1&ldh_credit_flow=" + encodeURIComponent(id) + "#ldh_credit_flow=" + encodeURIComponent(id), { active: true, insert: true, setParent: true }); }
             catch (_) { done(new Error("无法打开 Credit 标签")); return; }
             if (!handle) { done(new Error("无法打开 Credit 标签")); return; }
             deadline = setTimeout(function () { done(new Error("Credit 等待超时，请完成网页验证后点击 LDC 重试")); }, CREDIT.TAB_TIMEOUT);
             function check() {
                 if (settled) return;
+                if (Date.now()-startedAt>=CREDIT.TAB_TIMEOUT) { done(new Error("Credit 获取超时，点击 LDC 重试")); return; }
                 if (normUser(me.username) !== user) { done(new Error("论坛账号已变化")); return; }
                 const flow = creditFlow();
                 if (!flow || flow.id !== id) { done(new Error("Credit 流程已被替换")); return; }
@@ -2509,10 +2604,13 @@
                     const error = new Error(flow.error); error.creditStatus = flow.status; error.currentLevel = flow.currentLevel;
                     done(error);
                 } else if (flow.status === "failed") done(new Error(flow.error || "Credit 本次获取失败，点击重试"));
-                else if (handle.closed) done(new Error("Credit 授权标签已关闭"));
                 else if (ldc.state === "loading") {
                     const message = flow.status === "verifying" ? flow.error : "在 Credit 标签获取当前余额…";
                     if (message !== ldc.msg) { ldc.msg = message; render(); }
+                }
+                if (!settled && handle?.closed) {
+                    closedAt ||= Date.now();
+                    if (Date.now()-closedAt>=2000) done(new Error("Credit 获取标签已关闭，点击 LDC 重试"));
                 }
             }
             window.addEventListener("pagehide", onHide, { once:true });
@@ -2534,7 +2632,7 @@
         }
         const job = { user: user, promise: null };
         creditJob = job;
-        job.promise = refreshCreditOnce(manual).finally(function () { if (creditJob === job) creditJob = null; });
+        job.promise = runSharedAuxiliary('ldc', function () { return refreshCreditOnce(manual); }, {manual:!!manual}).finally(function () { if (creditJob === job) creditJob = null; });
         return job.promise;
     }
     async function refreshCreditOnce(manual) {
@@ -2558,6 +2656,7 @@
             }
             if (normUser(me.username) !== user || !info.id || normUser(info.username) !== user) throw Object.assign(new Error("论坛账号与 Credit 账号不一致"), { creditStatus: "account_mismatch" });
             const at = info.at || Date.now();
+            sharedCreditEvidence = {username:user,id:info.id,balance:info.balance,at:at};
             writeCreditCache(user, info.balance, at);
             ldc = { state: "ok", value: info.balance, msg: "已核验 Credit 当前账号和最新余额" };
             gmSet(creditAccessKey(user), { username: user, status: "ok", error: "", at: at });
@@ -3230,7 +3329,7 @@
         const job = { user: user, promise: null };
         agentJob = job;
         let pending;
-        try { pending = runArCheckinOnce(force, manual); } catch (error) { pending = Promise.reject(error); }
+        try { pending = runSharedAuxiliary('agent', function () { return runArCheckinOnce(force, manual); }, {manual:!!force}); } catch (error) { pending = Promise.reject(error); }
         job.promise = Promise.resolve(pending).catch(function (error) {
             if (normUser(me.username) !== user) return;
             arState = error?.sideDeferred ? "idle" : "fail"; arText = error?.message || String(error); arBal = "";
